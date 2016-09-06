@@ -5,9 +5,11 @@
 %% as published by the Free Software Foundation; either version
 %% 2 of the License, or (at your option) any later version.
 
--module(gtp_u_proxy_reg).
+-module(gtp_u_edp).
 
--behaviour(regine_server).
+-compile({parse_transform, cut}).
+
+-behaviour(gen_server).
 
 %% API
 -export([start_link/0]).
@@ -15,13 +17,15 @@
 -export([all/0]).
 
 %% regine_server callbacks
--export([init/1, handle_register/4, handle_unregister/3, handle_pid_remove/3, handle_death/3, terminate/2]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+	 code_change/3, terminate/2]).
 
 %% --------------------------------------------------------------------
 %% Include files
 %% --------------------------------------------------------------------
+-include_lib("stdlib/include/ms_transform.hrl").
 
--define(SERVER, ?MODULE).
+-define(SERVER, 'gtp-u').
 
 -record(state, {}).
 
@@ -30,14 +34,14 @@
 %%%===================================================================
 
 start_link() ->
-    regine_server:start_link({local, ?SERVER}, ?MODULE, []).
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-register(Name, IP) ->
-    regine_server:register(?SERVER, self(), Name, IP).
+register(Port, TEI) ->
+    gen_server:call(?SERVER, {register, self(), {Port, TEI}}).
 
 lookup(Key) ->
     case ets:lookup(?SERVER, Key) of
-	[{Key, Pid}] ->
+	[{Key, Pid, _}] ->
 	    Pid;
 	_ ->
 	    undefined
@@ -47,41 +51,40 @@ all() ->
     ets:tab2list(?SERVER).
 
 %%%===================================================================
-%%% regine callbacks
+%%% gen_server callbacks
 %%%===================================================================
 
 init([]) ->
     ets:new(?SERVER, [ordered_set, named_table, public, {keypos, 1}]),
     {ok, #state{}}.
 
-handle_register(Pid, Name, IP, State) ->
-    ets:insert_new(?SERVER, {Name, Pid}),
-    ets:insert_new(?SERVER, {IP, Pid}),
-    {ok, [Name, IP], State}.
+handle_call({register, Pid, Key}, _From, State) ->
+    MRef = erlang:monitor(process, Pid),
+    ets:insert_new(?SERVER, {Key, Pid, MRef}),
+    {reply, ok, State};
 
-handle_unregister(Key, Name, State) ->
-    unregister(Key, State),
-    unregister(Name, State).
+handle_call({bind, Port}, _From, State) ->
+    Reply = gtp_u_edp_port:bind(Port),
+    {reply, Reply, State};
 
-handle_pid_remove(_Pid, Keys, State) ->
-    lists:foreach(fun(Key) -> ets:delete(?SERVER, Key) end, Keys),
-    State.
+handle_call(_Request, _From, State) ->
+    lager:warning("EDP: unhandled call ~p, from ~p", [_Request, _From]),
+    {reply, ok, State}.
 
-handle_death(_Pid, _Reason, State) ->
-    State.
+handle_cast(_Cast, State) ->
+    {noreply, State}.
+
+handle_info({'DOWN', MonitorRef, process, _Pid, _Info}, State) ->
+    MS = ets:fun2ms(fun(Obj = {_Key,_P, MRef}) when MRef == MonitorRef -> Obj end),
+    lists:foreach(ets:delete_object(?SERVER, _), ets:select(?SERVER, MS)),
+    {noreply, State}.
 
 terminate(_Reason, _State) ->
 	ok.
 
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
-unregister(Key, State) ->
-    Pids = case ets:lookup(?SERVER, Key) of
-	       [{Key, Pid}] ->
-		   ets:delete(?SERVER, Key),
-		   [Pid];
-	       _ -> []
-	   end,
-    {Pids, State}.

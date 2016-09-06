@@ -5,32 +5,32 @@
 %% as published by the Free Software Foundation; either version
 %% 2 of the License, or (at your option) any later version.
 
--module(gtp_u_proxy_app_sup).
+-module(gtp_u_edp_handler_sup).
 
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, add_tunnel/6]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
-%% Helper macro for declaring children of supervisor
--define(CHILD(I, Type, Args), {I, {I, start_link, Args}, permanent, 5000, Type, [I]}).
+-define(SERVER, ?MODULE).
 
 %% ===================================================================
 %% API functions
 %% ===================================================================
 
 start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+
+add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Handler, HandlerOpts) ->
+    supervisor:start_child(?SERVER, [Port, PeerIP, LocalTEI, RemoteTEI, Handler, HandlerOpts]).
 
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
 
 init([]) ->
-    {ok, {{one_for_one, 5, 10}, [?CHILD(gtp_u_proxy_reg, worker, []),
-				 ?CHILD(gtp_u_proxy_sup, supervisor, []),
-				 ?CHILD(gtp_u_forwarder, worker, [])
-				]} }.
+    {ok, {{simple_one_for_one, 5, 10},
+	  [{gtp_u_edp_handler, {gtp_u_edp_handler, start_link, []}, temporary, 1000, worker, [gtp_u_edp_handler]}]}}.

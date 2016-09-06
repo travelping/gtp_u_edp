@@ -1,8 +1,7 @@
-gtp_u_proxy - GTPv1-U Proxy
-===========================
-[![Build Status](https://travis-ci.org/travelping/gtp_u_proxy.svg?branch=master)](https://travis-ci.org/travelping/gtp_u_proxy)
+gtp_u_edp - GTPv1-U Erlang Datapath
+===================================
 
-This is a GTPv1-U (3GPP TS 29.281) proxy implemented in Erlang.
+This is a GTPv1-U (3GPP TS 29.281) datapath element for the erGW GGSN/PGW project implemented in pure Erlang.
 
 2016-07-20 - this is code very much WiP !!!!
 

@@ -5,7 +5,7 @@
 %% as published by the Free Software Foundation; either version
 %% 2 of the License, or (at your option) any later version.
 
--module(gtp_u_proxy_app).
+-module(gtp_u_edp_app).
 
 -compile({parse_transform, cut}).
 -compile({parse_transform, do}).
@@ -22,7 +22,8 @@
 start(_StartType, _StartArgs) ->
     do([error_m ||
 %%	   gtp_config:init(),
-	   Pid <- gtp_u_proxy_app_sup:start_link(),
+	   Pid <- gtp_u_edp_app_sup:start_link(),
+	   gtp_u_edp_port:start_sockets(),
            return(Pid)
        ]).
 
