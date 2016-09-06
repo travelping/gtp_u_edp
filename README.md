@@ -1,5 +1,6 @@
 gtp_u_edp - GTPv1-U Erlang Datapath
 ===================================
+[![Build Status](https://travis-ci.org/travelping/gtp_u_edp.svg?branch=master)](https://travis-ci.org/travelping/gtp_u_edp)
 
 This is a GTPv1-U (3GPP TS 29.281) datapath element for the erGW GGSN/PGW project implemented in pure Erlang.
 
