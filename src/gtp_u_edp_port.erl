@@ -17,6 +17,8 @@
 
 -behaviour(gen_server).
 
+-compile({parse_transform, cut}).
+
 -include_lib("gen_socket/include/gen_socket.hrl").
 -include_lib("gtplib/include/gtp_packet.hrl").
 -include("include/gtp_u_edp.hrl").
@@ -73,8 +75,8 @@ init([Name, SocketOpts]) ->
     IP    = proplists:get_value(ip, SocketOpts),
     NetNs = proplists:get_value(netns, SocketOpts),
 
-    {ok, Recv} = make_gtp_socket(NetNs, IP, ?GTP1u_PORT),
-    {ok, Send} = make_gtp_socket(NetNs, IP, 0),
+    {ok, Recv} = make_gtp_socket(NetNs, IP, ?GTP1u_PORT, SocketOpts),
+    {ok, Send} = make_gtp_socket(NetNs, IP, 0, SocketOpts),
 
     State = #state{name = Name,
 		   ip = IP,
@@ -136,18 +138,32 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-make_gtp_socket(NetNs, {_,_,_,_} = IP, Port) when is_list(NetNs) ->
+make_gtp_socket(NetNs, {_,_,_,_} = IP, Port, Opts) when is_list(NetNs) ->
     {ok, Socket} = gen_socket:socketat(NetNs, inet, dgram, udp),
-    bind_gtp_socket(Socket, IP, Port);
-make_gtp_socket(_NetNs, {_,_,_,_} = IP, Port) ->
+    bind_gtp_socket(Socket, IP, Port, Opts);
+make_gtp_socket(_NetNs, {_,_,_,_} = IP, Port, Opts) ->
     {ok, Socket} = gen_socket:socket(inet, dgram, udp),
-    bind_gtp_socket(Socket, IP, Port).
+    bind_gtp_socket(Socket, IP, Port, Opts).
 
-bind_gtp_socket(Socket, {_,_,_,_} = IP, Port) ->
+bind_gtp_socket(Socket, {_,_,_,_} = IP, Port, Opts) ->
+    case proplists:get_bool(freebind, Opts) of
+	true ->
+	    ok = gen_socket:setsockopt(Socket, sol_ip, freebind, true);
+	_ ->
+	    ok
+    end,
     ok = gen_socket:bind(Socket, {inet4, IP, Port}),
     ok = gen_socket:setsockopt(Socket, sol_ip, recverr, true),
     ok = gen_socket:input_event(Socket, true),
+    lists:foreach(socket_setopts(Socket, _), Opts),
     {ok, Socket}.
+
+socket_setopts(Socket, {netdev, Device})
+  when is_list(Device); is_binary(Device) ->
+    BinDev = iolist_to_binary([Device, 0]),
+    ok = gen_socket:setsockopt(Socket, sol_socket, bindtodevice, BinDev);
+socket_setopts(_Socket, _) ->
+    ok.
 
 handle_input(Socket, State) ->
     case gen_socket:recvfrom(Socket) of
