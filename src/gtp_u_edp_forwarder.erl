@@ -51,15 +51,15 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast({handle_msg, InPortName, _IP, _Port, Msg},
-	    #state{grx_port = #port{name = InPortName},
+handle_cast({handle_msg, InPortName, _IP, _Port, #gtp{tei = TEI} = Msg},
+	    #state{grx_port = #port{name = InPortName, local_tei = TEI},
 		   proxy_port = ProxyPort} = State) ->
     forward(ProxyPort, Msg),
     {noreply, State};
 
-handle_cast({handle_msg, InPortName, _IP, _Port, Msg},
+handle_cast({handle_msg, InPortName, _IP, _Port, #gtp{tei = TEI} = Msg},
 	    #state{grx_port = GrxPort,
-		   proxy_port = #port{name = InPortName}} = State) ->
+		   proxy_port = #port{name = InPortName, local_tei = TEI}} = State) ->
     forward(GrxPort, Msg),
     {noreply, State};
 
