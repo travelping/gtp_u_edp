@@ -109,6 +109,10 @@ handle_call({delete_pdp_context, _PeerIP, LocalTEI, _RemoteTEI, _Args} = _Reques
 	end,
     {reply, Reply, State};
 
+handle_call(clear, _From, #state{name = Name} = State) ->
+    Reply = gtp_u_edp:port_foreach(fun clear_port/1, Name),
+    {reply, Reply, State};
+
 handle_call(_Request, _From, State) ->
     lager:info("EDP Port Call ~p: ~p", [_From, _Request]),
     Reply = ok,
@@ -232,3 +236,7 @@ handle_msg_1(_Socket, IP, Port,
 
 handle_msg_1(_Socket, _IP, _Port, _Msg, State) ->
     {noreply, State}.
+
+clear_port(Pid) ->
+    gen_server:cast(Pid, stop),
+    ok.

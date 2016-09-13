@@ -67,6 +67,10 @@ handle_cast(del_tunnel, State) ->
     lager:debug("Forwarder: delete tunnel"),
     {stop, normal, State};
 
+handle_cast(stop, State) ->
+    lager:debug("Forwarder: STOP"),
+    {stop, normal, State};
+
 handle_cast(Msg, State) ->
     lager:debug("Forwarder: unexpected Msg: ~p", [Msg]),
     {noreply, State}.

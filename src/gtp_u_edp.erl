@@ -13,7 +13,7 @@
 
 %% API
 -export([start_link/0]).
--export([register/2, lookup/1]).
+-export([register/2, lookup/1, port_foreach/2]).
 -export([all/0]).
 
 %% regine_server callbacks
@@ -46,6 +46,13 @@ lookup(Key) ->
 	_ ->
 	    undefined
     end.
+
+port_foreach(Fun, Name) ->
+    Ms = ets:fun2ms(fun({{Port, _TEI}, Pid, _MRef}) when Port =:= Name -> Pid end),
+    ets:safe_fixtable(?SERVER, true),
+    port_foreach_do(Fun, ets:select(?SERVER, Ms, 1)),
+    ets:safe_fixtable(?SERVER, false),
+    ok.
 
 all() ->
     ets:tab2list(?SERVER).
@@ -88,3 +95,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+port_foreach_do(_Fun, '$end_of_table') ->
+    ok;
+port_foreach_do(Fun, {[Pid], Continuation}) ->
+    Fun(Pid),
+    port_foreach_do(Fun, ets:select(Continuation)).
