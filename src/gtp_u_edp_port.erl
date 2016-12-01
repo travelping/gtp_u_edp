@@ -227,11 +227,10 @@ handle_msg_1(Socket, IP, Port,
 
     {noreply, State};
 
-handle_msg_1(_Socket, IP, Port,
-	     #gtp{version = v1, type = Type, tei = TEI, seq_no = SeqNo} = Msg,
+handle_msg_1(Socket, IP, Port,
+	     #gtp{version = v1} = Msg,
 	     #state{name = Name} = State) ->
-    lager:debug("~s from ~p:~w, TEI: ~w, SeqNo: ~w", [Type, IP, Port, TEI, SeqNo]),
-    gtp_u_edp_handler:handle_msg(Name, IP, Port, Msg),
+    gtp_u_edp_handler:handle_msg(Name, Socket, IP, Port, Msg),
     {noreply, State};
 
 handle_msg_1(_Socket, _IP, _Port, _Msg, State) ->
