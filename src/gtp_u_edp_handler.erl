@@ -12,6 +12,9 @@
 
 -include_lib("gtplib/include/gtp_packet.hrl").
 
+-define('Tunnel Endpoint Identifier Data I',	{tunnel_endpoint_identifier_data_i, 0}).
+-define('GTP-U Peer Address',			{gsn_address, 0}).
+
 %% ===================================================================
 %% API functions
 %% ===================================================================
@@ -43,6 +46,17 @@ handle_msg(Name, Socket, IP, Port, #gtp{type = g_pdu, tei = TEI, seq_no = _SeqNo
 	    gen_socket:sendto(Socket, {inet4, IP, Port}, Data),
 	    ok
     end;
+handle_msg(Name, _Socket, IP, Port,
+	   #gtp{type = error_indication,
+		ie = #{?'Tunnel Endpoint Identifier Data I' :=
+			   #tunnel_endpoint_identifier_data_i{tei = TEI}}} = Msg) ->
+    lager:notice("error_indication from ~p:~w, TEI: ~w", [IP, Port, TEI]),
+    case gtp_u_edp:lookup({Name, {remote, TEI}}) of
+	Handler when is_pid(Handler) ->
+	    gen_server:cast(Handler, {handle_msg, Name, IP, Port, Msg});
+	_ ->
+	   ok
+   end;
 handle_msg(_Name, _Socket, IP, Port, #gtp{type = Type, tei = TEI, seq_no = _SeqNo}) ->
     lager:notice("~p from ~p:~w, TEI: ~w, SeqNo: ~w", [Type, IP, Port, TEI, _SeqNo]),
     ok.

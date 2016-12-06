@@ -25,7 +25,7 @@
 
 %% API
 -export([start_sockets/0, start_link/1, port_reg_name/1,
-	 send/3, bind/2]).
+	 send/3, send_error_indication/3, packet_in/4, bind/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -57,6 +57,11 @@ port_reg_name(Name) when is_atom(Name) ->
 
 send(Pid, IP, Data) ->
     gen_server:cast(Pid, {send, IP, Data}).
+send_error_indication(Pid, IP, TEI) ->
+    gen_server:cast(Pid, {send_error_indication, IP, TEI}).
+
+packet_in(Pid, IP, Port, Msg) ->
+    gen_server:cast(Pid, {packet_in, IP, Port, Msg}).
 
 bind(Name, Owner) ->
     lager:info("RegName: ~p", [port_reg_name(Name)]),
@@ -122,8 +127,34 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({send, IP, Data}, #state{send = Send} = State) ->
-    R = gen_socket:sendto(Send, {inet4, IP, ?GTP1u_PORT}, Data),
-    lager:debug("Send Result: ~p", [R]),
+    case gen_socket:sendto(Send, {inet4, IP, ?GTP1u_PORT}, Data) of
+	{ok, _} ->
+	    ok;
+	Other ->
+	    lager:debug("invalid send result: ~p", [Other])
+    end,
+    {noreply, State};
+
+handle_cast({send_error_indication, IP, TEI},
+	    #state{ip = LocalIP, send = Send} = State) ->
+
+    IndicationIEs = [#tunnel_endpoint_identifier_data_i{tei = TEI},
+		   #gsn_address{address = ip2bin(LocalIP)}],
+    Indication = #gtp{version = v1, type = error_indication, tei = 0,
+		    seq_no = 0, ext_hdr = [], ie = IndicationIEs},
+    Data = gtp_packet:encode(Indication),
+
+    case gen_socket:sendto(Send, {inet4, IP, ?GTP1u_PORT}, Data) of
+	{ok, _} ->
+	    ok;
+	Other ->
+	    lager:debug("invalid send result: ~p", [Other])
+    end,
+    {noreply, State};
+
+handle_cast({packet_in, IP, Port, Msg}, #state{owner = Owner} = State)
+  when is_pid(Owner) ->
+    Owner ! {packet_in, IP, Port, Msg},
     {noreply, State};
 
 handle_cast(_Msg, State) ->
@@ -145,6 +176,14 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+ip2bin(IP) when is_binary(IP) ->
+    IP;
+ip2bin({A, B, C, D}) ->
+    <<A, B, C, D>>;
+ip2bin({A, B, C, D, E, F, G, H}) ->
+    <<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>.
+
 make_gtp_socket(NetNs, {_,_,_,_} = IP, Port, Opts) when is_list(NetNs) ->
     {ok, Socket} = gen_socket:socketat(NetNs, inet, dgram, udp),
     bind_gtp_socket(Socket, IP, Port, Opts);
