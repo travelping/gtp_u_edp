@@ -10,7 +10,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, add_tunnel/6]).
+-export([start_link/0, add_tunnel/7]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -24,8 +24,8 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Handler, HandlerOpts) ->
-    supervisor:start_child(?SERVER, [Port, PeerIP, LocalTEI, RemoteTEI, Handler, HandlerOpts]).
+add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Owner, Handler, HandlerOpts) ->
+    supervisor:start_child(?SERVER, [Port, PeerIP, LocalTEI, RemoteTEI, Owner, Handler, HandlerOpts]).
 
 %% ===================================================================
 %% Supervisor callbacks

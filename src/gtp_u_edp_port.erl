@@ -24,7 +24,8 @@
 -include("include/gtp_u_edp.hrl").
 
 %% API
--export([start_sockets/0, start_link/1, port_reg_name/1, send/3, bind/1]).
+-export([start_sockets/0, start_link/1, port_reg_name/1,
+	 send/3, bind/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -32,7 +33,7 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {name, ip, recv, send}).
+-record(state, {name, ip, owner, recv, send}).
 
 %%%===================================================================
 %%% API
@@ -57,11 +58,11 @@ port_reg_name(Name) when is_atom(Name) ->
 send(Pid, IP, Data) ->
     gen_server:cast(Pid, {send, IP, Data}).
 
-bind(Name) ->
+bind(Name, Owner) ->
     lager:info("RegName: ~p", [port_reg_name(Name)]),
     case erlang:whereis(port_reg_name(Name)) of
 	Pid when is_pid(Pid) ->
-	    gen_server:call(Pid, bind);
+	    gen_server:call(Pid, {bind, Owner});
 	_ ->
 	    {reply, {error, not_found}}
     end.
@@ -80,19 +81,21 @@ init([Name, SocketOpts]) ->
 
     State = #state{name = Name,
 		   ip = IP,
+		   owner = undefined,
 		   recv = Recv,
 		   send = Send},
     {ok, State}.
 
-handle_call(bind, _From, #state{ip = IP} = State) ->
+handle_call({bind, Owner}, _From, #state{ip = IP} = State) ->
+    lager:info("EDP Bind ~p", [Owner]),
     Reply = {ok, self(), IP},
-    {reply, Reply, State};
+    {reply, Reply, State#state{owner = Owner}};
 
 handle_call({create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args} = _Request,
-	    _From,#state{name = Name} = State) ->
+	    {Owner, _Tag} = _From, #state{name = Name} = State) ->
 
     lager:info("EDP Port Create PDP Context Call ~p: ~p", [_From, _Request]),
-    Reply = gtp_u_edp_handler:add_tunnel(Name, PeerIP, LocalTEI, RemoteTEI, Args),
+    Reply = gtp_u_edp_handler:add_tunnel(Name, PeerIP, LocalTEI, RemoteTEI, Owner, Args),
 
     {reply, Reply, State};
 

@@ -10,7 +10,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/5]).
+-export([start_link/6]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -19,28 +19,29 @@
 -include_lib("gtplib/include/gtp_packet.hrl").
 
 -define(SERVER, ?MODULE).
+-define('Tunnel Endpoint Identifier Data I',	{tunnel_endpoint_identifier_data_i, 0}).
 
 -record(port, {name, pid, ip, local_tei, remote_tei}).
--record(state, {grx_port, proxy_port}).
+-record(state, {owner, grx_port, proxy_port}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
-start_link(Port, PeerIP, LocalTEI, RemoteTEI, Args) ->
-    gen_server:start_link(?MODULE, [Port, PeerIP, LocalTEI, RemoteTEI | Args], []).
+start_link(Port, PeerIP, LocalTEI, RemoteTEI, Owner, Args) ->
+    gen_server:start_link(?MODULE, [Port, PeerIP, LocalTEI, RemoteTEI, Owner | Args], []).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-init([PortName, PeerIP, LocalTEI, RemoteTEI,
+init([PortName, PeerIP, LocalTEI, RemoteTEI, Owner,
       ProxyPortName, ProxyPeerIP, ProxyLocalTEI, ProxyRemoteTEI]) ->
     try
 	GrxPort = init_port(PortName, PeerIP, LocalTEI, RemoteTEI),
 	ProxyPort = init_port(ProxyPortName, ProxyPeerIP, ProxyLocalTEI, ProxyRemoteTEI),
 
-	State = #state{grx_port = GrxPort, proxy_port = ProxyPort},
+	State = #state{owner = Owner, grx_port = GrxPort, proxy_port = ProxyPort},
 	{ok, State}
     catch
 	error:noproc ->

@@ -70,8 +70,8 @@ handle_call({register, Pid, Key}, _From, State) ->
     ets:insert_new(?SERVER, {Key, Pid, MRef}),
     {reply, ok, State};
 
-handle_call({bind, Port}, _From, State) ->
-    Reply = gtp_u_edp_port:bind(Port),
+handle_call({bind, Port}, {Owner, _} = _From, State) ->
+    Reply = gtp_u_edp_port:bind(Port, Owner),
     {reply, Reply, State};
 
 handle_call(_Request, _From, State) ->
