@@ -43,7 +43,7 @@ handle_msg(Name, Socket, IP, Port, #gtp{type = g_pdu, tei = TEI, seq_no = _SeqNo
 	    Response = #gtp{version = v1, type = error_indication, tei = 0,
 			    seq_no = 0, ext_hdr = ExtHdr, ie = ResponseIEs},
 	    Data = gtp_packet:encode(Response),
-	    gen_socket:sendto(Socket, {inet4, IP, Port}, Data),
+	    gtp_u_edp_port:sendto(Socket, IP, Port, Data),
 	    ok
     end;
 handle_msg(Name, _Socket, IP, Port,

@@ -25,7 +25,8 @@
 
 %% API
 -export([start_sockets/0, start_link/1, port_reg_name/1,
-	 send/3, send_error_indication/3, packet_in/4, bind/2]).
+	 send/3, send_error_indication/3, packet_in/4, bind/2,
+	 sendto/4]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -71,6 +72,11 @@ bind(Name, Owner) ->
 	_ ->
 	    {reply, {error, not_found}}
     end.
+
+sendto(Socket, {_,_,_,_} = IP, Port, Data) ->
+    gen_socket:sendto(Socket, {inet4, IP, Port}, Data);
+sendto(Socket, {_,_,_,_,_,_,_,_} = IP, Port, Data) ->
+    gen_socket:sendto(Socket, {inet6, IP, Port}, Data).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -127,7 +133,7 @@ handle_call(_Request, _From, State) ->
     {reply, Reply, State}.
 
 handle_cast({send, IP, Data}, #state{send = Send} = State) ->
-    case gen_socket:sendto(Send, {inet4, IP, ?GTP1u_PORT}, Data) of
+    case sendto(Send, IP, ?GTP1u_PORT, Data) of
 	{ok, _} ->
 	    ok;
 	Other ->
@@ -144,7 +150,7 @@ handle_cast({send_error_indication, IP, TEI},
 		    seq_no = 0, ext_hdr = [], ie = IndicationIEs},
     Data = gtp_packet:encode(Indication),
 
-    case gen_socket:sendto(Send, {inet4, IP, ?GTP1u_PORT}, Data) of
+    case sendto(Send, IP, ?GTP1u_PORT, Data) of
 	{ok, _} ->
 	    ok;
 	Other ->
@@ -184,11 +190,14 @@ ip2bin({A, B, C, D}) ->
 ip2bin({A, B, C, D, E, F, G, H}) ->
     <<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>.
 
-make_gtp_socket(NetNs, {_,_,_,_} = IP, Port, Opts) when is_list(NetNs) ->
-    {ok, Socket} = gen_socket:socketat(NetNs, inet, dgram, udp),
+family({_,_,_,_}) -> inet;
+family({_,_,_,_,_,_,_,_}) -> inet6.
+
+make_gtp_socket(NetNs, IP, Port, Opts) when is_list(NetNs) ->
+    {ok, Socket} = gen_socket:socketat(NetNs, family(IP), dgram, udp),
     bind_gtp_socket(Socket, IP, Port, Opts);
-make_gtp_socket(_NetNs, {_,_,_,_} = IP, Port, Opts) ->
-    {ok, Socket} = gen_socket:socket(inet, dgram, udp),
+make_gtp_socket(_NetNs, IP, Port, Opts) ->
+    {ok, Socket} = gen_socket:socket(family(IP), dgram, udp),
     bind_gtp_socket(Socket, IP, Port, Opts).
 
 bind_gtp_socket(Socket, {_,_,_,_} = IP, Port, Opts) ->
@@ -202,6 +211,12 @@ bind_gtp_socket(Socket, {_,_,_,_} = IP, Port, Opts) ->
     ok = gen_socket:setsockopt(Socket, sol_ip, recverr, true),
     ok = gen_socket:input_event(Socket, true),
     lists:foreach(socket_setopts(Socket, _), Opts),
+    {ok, Socket};
+bind_gtp_socket(Socket, {_,_,_,_,_,_,_,_} = IP, Port, Opts) ->
+    %% ok = gen_socket:setsockopt(Socket, sol_ip, recverr, true),
+    ok = gen_socket:bind(Socket, {inet6, IP, Port}),
+    lists:foreach(socket_setopts(Socket, _), Opts),
+    ok = gen_socket:input_event(Socket, true),
     {ok, Socket}.
 
 socket_setopts(Socket, {netdev, Device})
@@ -216,7 +231,7 @@ handle_input(Socket, State) ->
 	{error, _} ->
 	    handle_err_input(Socket, State);
 
-	{ok, {inet4, IP, Port}, Data} ->
+	{ok, {_, IP, Port}, Data} ->
 	    ok = gen_socket:input_event(Socket, true),
 	    handle_msg(Socket, IP, Port, Data, State);
 
@@ -237,11 +252,10 @@ handle_err_input(Socket, State) ->
 handle_msg(Socket, IP, Port, Data, State) ->
     try gtp_packet:decode(Data) of
 	Msg = #gtp{version = v1} ->
-	    lager:debug("Msg: ~p", [lager:pr(Msg, ?MODULE)]),
 	    handle_msg_1(Socket, IP, Port, Msg, State);
 
 	Other ->
-	    lager:debug("Msg: ~p", [Other]),
+	    lager:debug("from ~p:~w, ~p", [IP, Port, Other]),
 	    {noreply, State}
     catch
 	Class:Error ->
@@ -264,7 +278,7 @@ handle_msg_1(Socket, IP, Port,
 
     Response = #gtp{version = v1, type = echo_response, tei = TEI, seq_no = SeqNo, ie = ResponseIEs},
     Data = gtp_packet:encode(Response),
-    R = gen_socket:sendto(Socket, {inet4, IP, Port}, Data),
+    R = sendto(Socket, IP, Port, Data),
     lager:debug("Echo Reply Send Result: ~p", [R]),
 
     {noreply, State};
