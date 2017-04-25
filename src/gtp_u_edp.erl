@@ -13,10 +13,10 @@
 
 %% API
 -export([start_link/0]).
--export([register/2, lookup/1, port_foreach/2]).
+-export([register/2, unregister/2, lookup/1, port_foreach/2]).
 -export([all/0]).
 
-%% regine_server callbacks
+%% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 code_change/3, terminate/2]).
 
@@ -38,6 +38,9 @@ start_link() ->
 
 register(Port, TEI) ->
     gen_server:call(?SERVER, {register, self(), {Port, TEI}}).
+
+unregister(Port, TEI) ->
+    gen_server:call(?SERVER, {unregister, {Port, TEI}}).
 
 lookup(Key) ->
     case ets:lookup(?SERVER, Key) of
@@ -68,6 +71,11 @@ init([]) ->
 handle_call({register, Pid, Key}, _From, State) ->
     MRef = erlang:monitor(process, Pid),
     ets:insert_new(?SERVER, {Key, Pid, MRef}),
+    {reply, ok, State};
+
+handle_call({unregister, Key}, _From, State) ->
+    L = ets:take(?SERVER, Key),
+    [erlang:demonitor(MRef) || {_Key, _Pid, MRef} <- L],
     {reply, ok, State};
 
 handle_call({bind, Port}, {Owner, _} = _From, State) ->

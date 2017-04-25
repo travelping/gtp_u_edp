@@ -8,7 +8,7 @@
 -module(gtp_u_edp_handler).
 
 %% API
--export([start_link/7, add_tunnel/6, del_tunnel/1, handle_msg/5]).
+-export([start_link/7, add_tunnel/6, update_tunnel/6, del_tunnel/1, handle_msg/5]).
 
 -include_lib("gtplib/include/gtp_packet.hrl").
 
@@ -25,6 +25,9 @@ start_link(Port, PeerIP, LocalTEI, RemoteTEI, Owner, HandlerMod, HandlerArgs) ->
 add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Owner, {Handler, HandlerArgs}) ->
     HandlerMod = map_handler(Handler),
     gtp_u_edp_handler_sup:add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Owner, HandlerMod, HandlerArgs).
+
+update_tunnel(Pid, PortName, PeerIP, LocalTEI, RemoteTEI, Args) ->
+    gen_server:call(Pid, [update_tunnel, PortName, PeerIP, LocalTEI, RemoteTEI | Args]).
 
 del_tunnel(Pid) ->
     gen_server:cast(Pid, del_tunnel).
@@ -51,7 +54,7 @@ handle_msg(Name, _Socket, IP, Port,
 		ie = #{?'Tunnel Endpoint Identifier Data I' :=
 			   #tunnel_endpoint_identifier_data_i{tei = TEI}}} = Msg) ->
     lager:notice("error_indication from ~p:~w, TEI: ~w", [IP, Port, TEI]),
-    case gtp_u_edp:lookup({Name, {remote, TEI}}) of
+    case gtp_u_edp:lookup({Name, {remote, IP, TEI}}) of
 	Handler when is_pid(Handler) ->
 	    gen_server:cast(Handler, {handle_msg, Name, IP, Port, Msg});
 	_ ->

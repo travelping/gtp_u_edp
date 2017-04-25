@@ -110,6 +110,19 @@ handle_call({create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args} = _Request,
 
     {reply, Reply, State};
 
+handle_call({update_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args} = _Request,
+	    _From, #state{name = Name} = State) ->
+
+    lager:info("EDP Port Update PDP Context Call ~p: ~p", [_From, _Request]),
+    Reply =
+	case gtp_u_edp:lookup({Name, LocalTEI}) of
+	    Pid when is_pid(Pid) ->
+		gtp_u_edp_handler:update_tunnel(Pid, Name, PeerIP, LocalTEI, RemoteTEI, Args);
+	    _ ->
+		{error, not_found}
+	end,
+    {reply, Reply, State};
+
 handle_call({delete_pdp_context, _PeerIP, LocalTEI, _RemoteTEI, _Args} = _Request,
 	    _From, #state{name = Name} = State) ->
 

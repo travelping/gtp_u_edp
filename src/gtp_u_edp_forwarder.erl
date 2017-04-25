@@ -48,10 +48,27 @@ init([PortName, PeerIP, LocalTEI, RemoteTEI, Owner,
 	    {stop, {error, invalid_port}}
     end.
 
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+handle_call([update_tunnel, PortName, PeerIP, LocalTEI, RemoteTEI,
+	     ProxyPortName, ProxyPeerIP, ProxyLocalTEI, ProxyRemoteTEI],
+	    _From, #state{grx_port = GrxPort0,
+			  proxy_port = ProxyPort0} = State0) ->
 
+    try
+	GrxPort = update_port(GrxPort0, PortName, PeerIP, LocalTEI, RemoteTEI),
+	ProxyPort = update_port(ProxyPort0, ProxyPortName, ProxyPeerIP,
+				ProxyLocalTEI, ProxyRemoteTEI),
+	State = State0#state{grx_port = GrxPort, proxy_port = ProxyPort},
+	{reply, ok, State}
+    catch
+	error:noproc ->
+	    {stop, normal, {error, invalid_port}, State0};
+	throw:Reason ->
+	    {stop, normal, Reason, State0}
+    end;
+
+handle_call(_Request, _From, State) ->
+    lager:warning("invalid CALL: ~p", [_Request]),
+    {reply, error, State}.
 
 handle_cast({handle_msg, InPortName, IP, Port,
 	     #gtp{type = error_indication,
@@ -118,9 +135,25 @@ init_port(Name, IP, LocalTEI, RemoteTEI) ->
     Pid = get_port_pid(Name),
     link(Pid),
     gtp_u_edp:register(Name, LocalTEI),
-    gtp_u_edp:register(Name, {remote, RemoteTEI}),
+    gtp_u_edp:register(Name, {remote, IP, RemoteTEI}),
 
-    #port{name = Name, pid = Pid, ip = IP, local_tei = LocalTEI, remote_tei = RemoteTEI}.
+    #port{name = Name, pid = Pid, ip = IP,
+	  local_tei  = LocalTEI,
+	  remote_tei = RemoteTEI}.
+
+update_tei_registration(Name, Old, New)
+  when Old /= New ->
+    gtp_u_edp:register(Name, New),
+    gtp_u_edp:unregister(Name, Old);
+update_tei_registration(_Name, _Old, _New) ->
+    ok.
+
+update_port(#port{name = Name} = Port,
+	    Name, IP, LocalTEI, RemoteTEI) ->
+    update_tei_registration(Name, Port#port.local_tei, LocalTEI),
+    update_tei_registration(Name, {remote, Port#port.ip, Port#port.remote_tei},
+			          {remote, IP, RemoteTEI}),
+    Port#port{ip = IP, local_tei  = LocalTEI, remote_tei = RemoteTEI}.
 
 forward(#port{pid = Pid, remote_tei = TEI, ip = IP}, Msg) ->
     Data = gtp_packet:encode(Msg#gtp{tei = TEI}),
