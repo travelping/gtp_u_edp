@@ -101,6 +101,7 @@ all() ->
      create_pdp_context_clear,
      delete_pdp_context,
      update_pdp_context,
+     accounting_request,
      forward_data,
      remote_invalid,
      local_invalid
@@ -390,6 +391,38 @@ update_pdp_context(Config) ->
     meck_validate(Config),
     ok.
 
+accounting_request() ->
+    [{doc, "Test that reading accounting data from the DP works"}].
+accounting_request(Config) ->
+    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, grx}),
+    ok = gen_server:call(Pid, clear),
+
+    PeerIP = ?CLIENT_IP,
+    LocalTEI = get_next_teid(),
+    RemoteTEI = get_next_teid(),
+    FwdRemoteIP = ?FINAL_GSN,
+    FwdLocalTEI = get_next_teid(),
+    FwdRemoteTEI = get_next_teid(),
+    Args = {forward, ['proxy-grx', FwdRemoteIP, FwdLocalTEI, FwdRemoteTEI]},
+    Request = {create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
+
+    ?match({ok, _}, gen_server:call(Pid, Request)),
+    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
+    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+
+    AccountingReq = {get_accounting, PeerIP, LocalTEI, RemoteTEI},
+    ?match({ok, _}, gen_server:call(Pid, AccountingReq)),
+
+    ok = gen_server:call(Pid, clear),
+
+    %% gtp_u_edp:all/0 bypasses the reg server
+    ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
+    ok = meck:wait(4, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
+    ?equal([], gtp_u_edp:all()),
+
+    meck_validate(Config),
+    ok.
+
 forward_data() ->
     [{doc, "Test forwarding data works"}].
 forward_data(Config) ->
@@ -429,6 +462,9 @@ forward_data(Config) ->
     after ?TIMEOUT ->
 	    ct:fail(timeout)
     end,
+
+    AccountingReq = {get_accounting, PeerIP, LocalTEI, RemoteTEI},
+    ?match({ok, {counter,{8,1},{8,1}}}, gen_server:call(Pid, AccountingReq)),
 
     ?equal(ok, gen_server:call(Pid, Request1)),
 

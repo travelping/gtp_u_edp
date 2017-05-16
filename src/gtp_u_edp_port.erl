@@ -168,30 +168,20 @@ handle_call({create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args} = _Request,
 
     {reply, Reply, State};
 
-handle_call({update_pdp_context, _, LocalTEI, _, _} = Request,
-	    _From, #state{name = Name} = State) ->
-
+handle_call({update_pdp_context, _, LocalTEI, _, _} = Request, _From, State) ->
     lager:info("EDP Port Update PDP Context Call ~p: ~p", [_From, Request]),
-    Reply =
-	case gtp_u_edp:lookup({Name, LocalTEI}) of
-	    Pid when is_pid(Pid) ->
-		gen_server:call(Pid, Request);
-	    _ ->
-		{error, not_found}
-	end,
+    Reply = call_forwarder(LocalTEI, Request, State),
     {reply, Reply, State};
 
-handle_call({delete_pdp_context, _, LocalTEI, _, _} = Request,
-	    _From, #state{name = Name} = State) ->
+handle_call({delete_pdp_context, _, LocalTEI, _, _} = Request, _From, State) ->
 
     lager:info("EDP Port Delete PDP Context Call ~p: ~p", [_From, Request]),
-    Reply =
-	case gtp_u_edp:lookup({Name, LocalTEI}) of
-	    Pid when is_pid(Pid) ->
-		gen_server:call(Pid, Request);
-	    _ ->
-		{error, not_found}
-	end,
+    Reply = call_forwarder(LocalTEI, Request, State),
+    {reply, Reply, State};
+
+handle_call({get_accounting, _, LocalTEI, _} = Request, _From, State) ->
+    lager:info("EDP Port Get Accounting Call ~p: ~p", [_From, Request]),
+    Reply = call_forwarder(LocalTEI, Request, State),
     {reply, Reply, State};
 
 handle_call(clear, _From, #state{name = Name} = State) ->
@@ -199,7 +189,7 @@ handle_call(clear, _From, #state{name = Name} = State) ->
     {reply, Reply, State};
 
 handle_call(_Request, _From, State) ->
-    lager:info("EDP Port Call ~p: ~p", [_From, _Request]),
+    lager:warning("unknown EDP Port Call ~p: ~p", [_From, _Request]),
     Reply = ok,
     {reply, Reply, State}.
 
@@ -405,3 +395,11 @@ clear_port(Pid) ->
 
 make_request(Name, Msg, ArrivalTS) ->
     #request{name = Name, arrival_ts = ArrivalTS, msg = Msg}.
+
+call_forwarder(LocalTEI, Request, #state{name = Name}) ->
+    case gtp_u_edp:lookup({Name, LocalTEI}) of
+	Pid when is_pid(Pid) ->
+	    gen_server:call(Pid, Request);
+	_ ->
+	    {error, not_found}
+    end.

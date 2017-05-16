@@ -21,8 +21,9 @@
 -define(SERVER, ?MODULE).
 -define('Tunnel Endpoint Identifier Data I',	{tunnel_endpoint_identifier_data_i, 0}).
 
+-record(counter, {rx = {0, 0}, tx = {0, 0}}).
 -record(port, {name, pid, ip, local_tei, remote_tei}).
--record(state, {owner, grx_port, proxy_port}).
+-record(state, {owner, grx_port, proxy_port, counter = #counter{}}).
 
 %%%===================================================================
 %%% API
@@ -70,6 +71,10 @@ handle_call({delete_pdp_context, _PeerIP, _LocalTEI, _RemoteTEI, _Args}, _From, 
     lager:debug("Forwarder: delete tunnel"),
     {stop, normal, ok, State};
 
+handle_call({get_accounting, _PeerIP, _LocalTEI, _RemoteTEI}, _From,
+	    #state{counter = Counter} = State) ->
+    {reply, {ok, Counter}, State};
+
 handle_call(_Request, _From, State) ->
     lager:warning("invalid CALL: ~p", [_Request]),
     {reply, error, State}.
@@ -98,13 +103,13 @@ handle_cast({handle_msg, InPortName, Req, _IP, _Port, #gtp{tei = TEI} = Msg},
 	    #state{grx_port = #port{name = InPortName, local_tei = TEI},
 		   proxy_port = ProxyPort} = State) ->
     forward(ProxyPort, Req, Msg),
-    {noreply, State};
+    {noreply, account_payload(rx, Msg, State)};
 
 handle_cast({handle_msg, InPortName, Req, _IP, _Port, #gtp{tei = TEI} = Msg},
 	    #state{grx_port = GrxPort,
 		   proxy_port = #port{name = InPortName, local_tei = TEI}} = State) ->
     forward(GrxPort, Req, Msg),
-    {noreply, State};
+    {noreply, account_payload(tx, Msg, State)};
 
 
 handle_cast(stop, State) ->
@@ -170,3 +175,17 @@ send_error_indication(Req, #port{pid = Pid, local_tei = TEI, ip = IP}) ->
 
 packet_in(#port{pid = Pid}, Req, IP, Port, Msg) ->
     gtp_u_edp_port:packet_in(Pid, Req, IP, Port, Msg).
+
+account_payload(Direction, #gtp{ie = Payload},
+		#state{counter = Counter} = State)
+  when is_binary(Payload) ->
+    State#state{counter = update_counter(Direction, size(Payload), Counter)};
+account_payload(_, _, State) ->
+    State.
+
+update_counter(Add, {Bytes, Pkts}) ->
+    {Bytes + Add, Pkts + 1}.
+update_counter(tx, Bytes, #counter{tx = Tx} = Counter) ->
+    Counter#counter{tx = update_counter(Bytes, Tx)};
+update_counter(rx, Bytes, #counter{rx = Rx} = Counter) ->
+    Counter#counter{rx = update_counter(Bytes, Rx)}.
