@@ -1,6 +1,7 @@
 gtp_u_edp - GTPv1-U Erlang Datapath
 ===================================
-[![Build Status](https://travis-ci.org/travelping/gtp_u_edp.svg?branch=master)](https://travis-ci.org/travelping/gtp_u_edp)
+[![Build Status][travis badge]][travis]
+[![Erlang Versions][erlang version badge]][travis]
 
 This is a GTPv1-U (3GPP TS 29.281) datapath element for the erGW GGSN/PGW project implemented in pure Erlang.
 
@@ -15,5 +16,9 @@ Using tetrapak:
 
 Using rebar:
 
-    # rebar get-deps
-    # rebar compile
+    # rebar3 compile
+
+<!-- Badges -->
+[travis]: https://travis-ci.org/travelping/gtp_u_edp
+[travis badge]: https://img.shields.io/travis/travelping/gtp_u_edp/master.svg?style=flat-square
+[erlang version badge]: https://img.shields.io/badge/erlang-R19.1%20to%2019.3-blue.svg?style=flat-square
