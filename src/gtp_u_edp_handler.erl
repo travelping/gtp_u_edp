@@ -8,7 +8,7 @@
 -module(gtp_u_edp_handler).
 
 %% API
--export([start_link/7, add_tunnel/6, update_tunnel/6, del_tunnel/1, handle_msg/5]).
+-export([start_link/7, add_tunnel/6, update_tunnel/6, del_tunnel/1, handle_msg/6]).
 
 -include_lib("gtplib/include/gtp_packet.hrl").
 
@@ -32,11 +32,11 @@ update_tunnel(Pid, PortName, PeerIP, LocalTEI, RemoteTEI, Args) ->
 del_tunnel(Pid) ->
     gen_server:cast(Pid, del_tunnel).
 
-handle_msg(Name, Socket, IP, Port, #gtp{type = g_pdu, tei = TEI, seq_no = _SeqNo} = Msg)
+handle_msg(Name, Socket, Req, IP, Port, #gtp{type = g_pdu, tei = TEI, seq_no = _SeqNo} = Msg)
   when is_integer(TEI), TEI /= 0 ->
     case gtp_u_edp:lookup({Name, TEI}) of
 	Handler when is_pid(Handler) ->
-	    gen_server:cast(Handler, {handle_msg, Name, IP, Port, Msg});
+	    handler_handle_msg(Handler, Name, Req, IP, Port, Msg);
 	_ ->
 	    lager:notice("g_pdu from ~p:~w, TEI: ~w, SeqNo: ~w", [IP, Port, TEI, _SeqNo]),
 
@@ -47,26 +47,30 @@ handle_msg(Name, Socket, IP, Port, #gtp{type = g_pdu, tei = TEI, seq_no = _SeqNo
 			    seq_no = 0, ext_hdr = ExtHdr, ie = ResponseIEs},
 	    Data = gtp_packet:encode(Response),
 	    gtp_u_edp_port:sendto(Socket, IP, Port, Data),
+	    gtp_u_edp_metrics:measure_request_error(Req, context_not_found),
 	    ok
     end;
-handle_msg(Name, _Socket, IP, Port,
+handle_msg(Name, _Socket, Req, IP, Port,
 	   #gtp{type = error_indication,
 		ie = #{?'Tunnel Endpoint Identifier Data I' :=
 			   #tunnel_endpoint_identifier_data_i{tei = TEI}}} = Msg) ->
     lager:notice("error_indication from ~p:~w, TEI: ~w", [IP, Port, TEI]),
     case gtp_u_edp:lookup({Name, {remote, IP, TEI}}) of
 	Handler when is_pid(Handler) ->
-	    gen_server:cast(Handler, {handle_msg, Name, IP, Port, Msg});
+	    handler_handle_msg(Handler, Name, Req, IP, Port, Msg);
 	_ ->
-	   ok
+	    gtp_u_edp_metrics:measure_request_error(Req, context_not_found),
+	    ok
    end;
-handle_msg(_Name, _Socket, IP, Port, #gtp{type = Type, tei = TEI, seq_no = _SeqNo}) ->
+handle_msg(_Name, _Socket, _Req, IP, Port, #gtp{type = Type, tei = TEI, seq_no = _SeqNo}) ->
     lager:notice("~p from ~p:~w, TEI: ~w, SeqNo: ~w", [Type, IP, Port, TEI, _SeqNo]),
     ok.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+handler_handle_msg(Handler, Name, Req, IP, Port, Msg) ->
+    gen_server:cast(Handler, {handle_msg, Name, Req, IP, Port, Msg}).
 
 ip2bin(IP) when is_binary(IP) ->
     IP;

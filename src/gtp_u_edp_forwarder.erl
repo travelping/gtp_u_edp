@@ -70,36 +70,36 @@ handle_call(_Request, _From, State) ->
     lager:warning("invalid CALL: ~p", [_Request]),
     {reply, error, State}.
 
-handle_cast({handle_msg, InPortName, IP, Port,
+handle_cast({handle_msg, InPortName, Req, IP, Port,
 	     #gtp{type = error_indication,
 		  ie = #{?'Tunnel Endpoint Identifier Data I' :=
 			     #tunnel_endpoint_identifier_data_i{tei = TEI}}} = Msg},
 	    #state{grx_port = #port{name = InPortName, remote_tei = TEI} = GrxPort,
 		   proxy_port = ProxyPort} = State) ->
-    send_error_indication(ProxyPort),
-    packet_in(GrxPort, IP, Port, Msg),
+    send_error_indication(Req, ProxyPort),
+    packet_in(GrxPort, Req, IP, Port, Msg),
     {noreply, State};
 
-handle_cast({handle_msg, InPortName, IP, Port,
+handle_cast({handle_msg, InPortName, Req, IP, Port,
 	     #gtp{type = error_indication,
 		  ie = #{?'Tunnel Endpoint Identifier Data I' :=
 			     #tunnel_endpoint_identifier_data_i{tei = TEI}}} = Msg},
 	    #state{grx_port = GrxPort,
 		   proxy_port = #port{name = InPortName, remote_tei = TEI} = ProxyPort} = State) ->
-    send_error_indication(GrxPort),
-    packet_in(ProxyPort, IP, Port, Msg),
+    send_error_indication(Req, GrxPort),
+    packet_in(ProxyPort, Req, IP, Port, Msg),
     {noreply, State};
 
-handle_cast({handle_msg, InPortName, _IP, _Port, #gtp{tei = TEI} = Msg},
+handle_cast({handle_msg, InPortName, Req, _IP, _Port, #gtp{tei = TEI} = Msg},
 	    #state{grx_port = #port{name = InPortName, local_tei = TEI},
 		   proxy_port = ProxyPort} = State) ->
-    forward(ProxyPort, Msg),
+    forward(ProxyPort, Req, Msg),
     {noreply, State};
 
-handle_cast({handle_msg, InPortName, _IP, _Port, #gtp{tei = TEI} = Msg},
+handle_cast({handle_msg, InPortName, Req, _IP, _Port, #gtp{tei = TEI} = Msg},
 	    #state{grx_port = GrxPort,
 		   proxy_port = #port{name = InPortName, local_tei = TEI}} = State) ->
-    forward(GrxPort, Msg),
+    forward(GrxPort, Req, Msg),
     {noreply, State};
 
 handle_cast(del_tunnel, State) ->
@@ -155,12 +155,12 @@ update_port(#port{name = Name} = Port,
 			          {remote, IP, RemoteTEI}),
     Port#port{ip = IP, local_tei  = LocalTEI, remote_tei = RemoteTEI}.
 
-forward(#port{pid = Pid, remote_tei = TEI, ip = IP}, Msg) ->
+forward(#port{pid = Pid, remote_tei = TEI, ip = IP}, Req, Msg) ->
     Data = gtp_packet:encode(Msg#gtp{tei = TEI}),
-    gtp_u_edp_port:send(Pid, IP, Data).
+    gtp_u_edp_port:send(Pid, Req, IP, Data).
 
-send_error_indication(#port{pid = Pid, local_tei = TEI, ip = IP}) ->
-    gtp_u_edp_port:send_error_indication(Pid, IP, TEI).
+send_error_indication(Req, #port{pid = Pid, local_tei = TEI, ip = IP}) ->
+    gtp_u_edp_port:send_error_indication(Pid, Req, IP, TEI).
 
-packet_in(#port{pid = Pid}, IP, Port, Msg) ->
-    gtp_u_edp_port:packet_in(Pid, IP, Port, Msg).
+packet_in(#port{pid = Pid}, Req, IP, Port, Msg) ->
+    gtp_u_edp_port:packet_in(Pid, Req, IP, Port, Msg).
