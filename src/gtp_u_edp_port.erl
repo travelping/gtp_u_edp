@@ -25,7 +25,7 @@
 
 %% API
 -export([start_sockets/0, start_link/1, port_reg_name/1,
-	 send/3, send_error_indication/3, packet_in/4, bind/2,
+	 send/4, send_error_indication/4, packet_in/5, bind/2,
 	 sendto/4]).
 
 %% gen_server callbacks
@@ -56,13 +56,13 @@ port_reg_name(Name) when is_atom(Name) ->
     BinName = iolist_to_binary(io_lib:format("port_~s", [Name])),
     binary_to_atom(BinName, latin1).
 
-send(Pid, IP, Data) ->
-    gen_server:cast(Pid, {send, IP, Data}).
-send_error_indication(Pid, IP, TEI) ->
-    gen_server:cast(Pid, {send_error_indication, IP, TEI}).
+send(Pid, Req, IP, Data) ->
+    gen_server:cast(Pid, {send, Req, IP, Data}).
+send_error_indication(Pid, Req, IP, TEI) ->
+    gen_server:cast(Pid, {send_error_indication, Req, IP, TEI}).
 
-packet_in(Pid, IP, Port, Msg) ->
-    gen_server:cast(Pid, {packet_in, IP, Port, Msg}).
+packet_in(Pid, Req, IP, Port, Msg) ->
+    gen_server:cast(Pid, {packet_in, Req, IP, Port, Msg}).
 
 bind(Name, Owner) ->
     lager:info("RegName: ~p", [port_reg_name(Name)]),
@@ -89,6 +89,8 @@ init([Name, SocketOpts]) ->
 
     {ok, Recv} = make_gtp_socket(NetNs, IP, ?GTP1u_PORT, SocketOpts),
     {ok, Send} = make_gtp_socket(NetNs, IP, 0, SocketOpts),
+
+    gtp_u_edp_metrics:init(Name),
 
     State = #state{name = Name,
 		   ip = IP,
@@ -145,16 +147,18 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
-handle_cast({send, IP, Data}, #state{send = Send} = State) ->
+handle_cast({send, Req, IP, Data}, #state{send = Send} = State) ->
     case sendto(Send, IP, ?GTP1u_PORT, Data) of
 	{ok, _} ->
+	    gtp_u_edp_metrics:measure_request(Req),
 	    ok;
 	Other ->
+	    gtp_u_edp_metrics:measure_request_error(Req, send_failed),
 	    lager:debug("invalid send result: ~p", [Other])
     end,
     {noreply, State};
 
-handle_cast({send_error_indication, IP, TEI},
+handle_cast({send_error_indication, _Req, IP, TEI},
 	    #state{ip = LocalIP, send = Send} = State) ->
 
     IndicationIEs = [#tunnel_endpoint_identifier_data_i{tei = TEI},
@@ -171,9 +175,10 @@ handle_cast({send_error_indication, IP, TEI},
     end,
     {noreply, State};
 
-handle_cast({packet_in, IP, Port, Msg}, #state{owner = Owner} = State)
+handle_cast({packet_in, Req, IP, Port, Msg}, #state{owner = Owner} = State)
   when is_pid(Owner) ->
     Owner ! {packet_in, IP, Port, Msg},
+    gtp_u_edp_metrics:measure_request(Req),
     {noreply, State};
 
 handle_cast(_Msg, State) ->
@@ -247,8 +252,9 @@ handle_input(Socket, State) ->
 	    handle_err_input(Socket, State);
 
 	{ok, {_, IP, Port}, Data} ->
+	    ArrivalTS = erlang:monotonic_time(),
 	    ok = gen_socket:input_event(Socket, true),
-	    handle_msg(Socket, IP, Port, Data, State);
+	    handle_msg(Socket, ArrivalTS, IP, Port, Data, State);
 
 	Other ->
 	    lager:error("got unhandled input: ~p", [Other]),
@@ -264,21 +270,24 @@ handle_err_input(Socket, State) ->
 	    {noreply, State}
     end.
 
-handle_msg(Socket, IP, Port, Data, State) ->
+handle_msg(Socket, ArrivalTS, IP, Port, Data, #state{name = Name} = State) ->
     try gtp_packet:decode(Data) of
 	Msg = #gtp{version = v1} ->
-	    handle_msg_1(Socket, IP, Port, Msg, State);
+	    Req = make_request(Name, Msg, ArrivalTS),
+	    handle_msg_1(Socket, Req, IP, Port, Msg, State);
 
 	Other ->
+	    gtp_u_edp_metrics:measure_request_error(Name, ArrivalTS, invalid_payload),
 	    lager:debug("from ~p:~w, ~p", [IP, Port, Other]),
 	    {noreply, State}
     catch
 	Class:Error ->
+	    gtp_u_edp_metrics:measure_request_error(Name, ArrivalTS, invalid_payload),
 	    lager:debug("Info Error: ~p:~p", [Class, Error]),
 	    {noreply, State}
     end.
 
-handle_msg_1(Socket, IP, Port,
+handle_msg_1(Socket, Req, IP, Port,
 	     #gtp{version = v1, type = echo_request, tei = TEI, seq_no = SeqNo}, State) ->
 
     lager:debug("Echo Request from ~p:~w, TEI: ~w, SeqNo: ~w", [IP, Port, TEI, SeqNo]),
@@ -295,18 +304,22 @@ handle_msg_1(Socket, IP, Port,
     Data = gtp_packet:encode(Response),
     R = sendto(Socket, IP, Port, Data),
     lager:debug("Echo Reply Send Result: ~p", [R]),
+    gtp_u_edp_metrics:measure_request(Req),
 
     {noreply, State};
 
-handle_msg_1(Socket, IP, Port,
+handle_msg_1(Socket, Req, IP, Port,
 	     #gtp{version = v1} = Msg,
 	     #state{name = Name} = State) ->
-    gtp_u_edp_handler:handle_msg(Name, Socket, IP, Port, Msg),
+    gtp_u_edp_handler:handle_msg(Name, Socket, Req, IP, Port, Msg),
     {noreply, State};
 
-handle_msg_1(_Socket, _IP, _Port, _Msg, State) ->
+handle_msg_1(_Socket, _Req, _IP, _Port, _Msg, State) ->
     {noreply, State}.
 
 clear_port(Pid) ->
     gen_server:cast(Pid, stop),
     ok.
+
+make_request(Name, Msg, ArrivalTS) ->
+    #request{name = Name, arrival_ts = ArrivalTS, msg = Msg}.
