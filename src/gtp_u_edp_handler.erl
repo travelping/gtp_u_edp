@@ -26,7 +26,11 @@ add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Owner, {Handler, HandlerArgs}) ->
     HandlerMod = map_handler(Handler),
     gtp_u_edp_handler_sup:add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Owner, HandlerMod, HandlerArgs).
 
-update_tunnel(Pid, PortName, PeerIP, LocalTEI, RemoteTEI, Args) ->
+update_tunnel(Pid, PortName, PeerIP, LocalTEI, RemoteTEI, {forward, Args})
+  when is_list(Args)->
+    gen_server:call(Pid, [update_tunnel, PortName, PeerIP, LocalTEI, RemoteTEI | Args]);
+update_tunnel(Pid, PortName, PeerIP, LocalTEI, RemoteTEI, Args)
+  when is_list(Args)->
     gen_server:call(Pid, [update_tunnel, PortName, PeerIP, LocalTEI, RemoteTEI | Args]).
 
 del_tunnel(Pid) ->
