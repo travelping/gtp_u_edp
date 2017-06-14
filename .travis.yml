@@ -16,3 +16,4 @@ before_install:
 script:
   - ./rebar3 compile
   - ./rebar3 xref
+  - ./rebar3 do xref, ct, coveralls send
