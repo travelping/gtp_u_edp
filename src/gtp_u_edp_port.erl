@@ -83,6 +83,8 @@ sendto(Socket, {_,_,_,_,_,_,_,_} = IP, Port, Data) ->
 %%%===================================================================
 
 init([Name, SocketOpts]) ->
+    process_flag(trap_exit, true),
+
     %% TODO: better config validation and handling
     IP    = proplists:get_value(ip, SocketOpts),
     NetNs = proplists:get_value(netns, SocketOpts),
