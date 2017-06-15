@@ -132,8 +132,14 @@ get_port_pid(Name) ->
     whereis(RegName).
 
 init_port(Name, IP, LocalTEI, RemoteTEI) ->
-    Pid = get_port_pid(Name),
-    link(Pid),
+    case get_port_pid(Name) of
+	Pid when is_pid(Pid) ->
+	    link(Pid);
+	_ ->
+	    error(noproc),
+	    %% not reached, silence bogus warning
+	    Pid = undefined
+    end,
     gtp_u_edp:register(Name, LocalTEI),
     gtp_u_edp:register(Name, {remote, IP, RemoteTEI}),
 
