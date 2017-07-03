@@ -48,14 +48,14 @@ init([PortName, PeerIP, LocalTEI, RemoteTEI, Owner,
 	    {stop, {error, invalid_port}}
     end.
 
-handle_call([update_tunnel, PortName, PeerIP, LocalTEI, RemoteTEI,
-	     ProxyPortName, ProxyPeerIP, ProxyLocalTEI, ProxyRemoteTEI],
+handle_call({update_pdp_context, PeerIP, LocalTEI, RemoteTEI,
+	     {forward, [_ProxyPortName, ProxyPeerIP, ProxyLocalTEI, ProxyRemoteTEI]}},
 	    _From, #state{grx_port = GrxPort0,
 			  proxy_port = ProxyPort0} = State0) ->
 
     try
-	GrxPort = update_port(GrxPort0, PortName, PeerIP, LocalTEI, RemoteTEI),
-	ProxyPort = update_port(ProxyPort0, ProxyPortName, ProxyPeerIP,
+	GrxPort = update_port(GrxPort0, PeerIP, LocalTEI, RemoteTEI),
+	ProxyPort = update_port(ProxyPort0, ProxyPeerIP,
 				ProxyLocalTEI, ProxyRemoteTEI),
 	State = State0#state{grx_port = GrxPort, proxy_port = ProxyPort},
 	{reply, ok, State}
@@ -65,6 +65,10 @@ handle_call([update_tunnel, PortName, PeerIP, LocalTEI, RemoteTEI,
 	throw:Reason ->
 	    {stop, normal, Reason, State0}
     end;
+
+handle_call({delete_pdp_context, _PeerIP, _LocalTEI, _RemoteTEI, _Args}, _From, State) ->
+    lager:debug("Forwarder: delete tunnel"),
+    {stop, normal, ok, State};
 
 handle_call(_Request, _From, State) ->
     lager:warning("invalid CALL: ~p", [_Request]),
@@ -102,9 +106,6 @@ handle_cast({handle_msg, InPortName, Req, _IP, _Port, #gtp{tei = TEI} = Msg},
     forward(GrxPort, Req, Msg),
     {noreply, State};
 
-handle_cast(del_tunnel, State) ->
-    lager:debug("Forwarder: delete tunnel"),
-    {stop, normal, State};
 
 handle_cast(stop, State) ->
     lager:debug("Forwarder: STOP"),
@@ -154,8 +155,7 @@ update_tei_registration(Name, Old, New)
 update_tei_registration(_Name, _Old, _New) ->
     ok.
 
-update_port(#port{name = Name} = Port,
-	    Name, IP, LocalTEI, RemoteTEI) ->
+update_port(#port{name = Name} = Port, IP, LocalTEI, RemoteTEI) ->
     update_tei_registration(Name, Port#port.local_tei, LocalTEI),
     update_tei_registration(Name, {remote, Port#port.ip, Port#port.remote_tei},
 			          {remote, IP, RemoteTEI}),

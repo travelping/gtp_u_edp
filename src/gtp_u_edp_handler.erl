@@ -8,7 +8,7 @@
 -module(gtp_u_edp_handler).
 
 %% API
--export([start_link/7, add_tunnel/6, update_tunnel/6, del_tunnel/1, handle_msg/6]).
+-export([start_link/7, add_tunnel/6, handle_msg/6]).
 
 -include_lib("gtplib/include/gtp_packet.hrl").
 
@@ -25,16 +25,6 @@ start_link(Port, PeerIP, LocalTEI, RemoteTEI, Owner, HandlerMod, HandlerArgs) ->
 add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Owner, {Handler, HandlerArgs}) ->
     HandlerMod = map_handler(Handler),
     gtp_u_edp_handler_sup:add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Owner, HandlerMod, HandlerArgs).
-
-update_tunnel(Pid, PortName, PeerIP, LocalTEI, RemoteTEI, {forward, Args})
-  when is_list(Args)->
-    gen_server:call(Pid, [update_tunnel, PortName, PeerIP, LocalTEI, RemoteTEI | Args]);
-update_tunnel(Pid, PortName, PeerIP, LocalTEI, RemoteTEI, Args)
-  when is_list(Args)->
-    gen_server:call(Pid, [update_tunnel, PortName, PeerIP, LocalTEI, RemoteTEI | Args]).
-
-del_tunnel(Pid) ->
-    gen_server:cast(Pid, del_tunnel).
 
 handle_msg(Name, Socket, Req, IP, Port, #gtp{type = g_pdu, tei = TEI, seq_no = _SeqNo} = Msg)
   when is_integer(TEI), TEI /= 0 ->
