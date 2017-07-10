@@ -11,6 +11,7 @@
 -export([start_link/7, add_tunnel/6, handle_msg/6]).
 
 -include_lib("gtplib/include/gtp_packet.hrl").
+-include("include/gtp_u_edp.hrl").
 
 -define('Tunnel Endpoint Identifier Data I',	{tunnel_endpoint_identifier_data_i, 0}).
 -define('GTP-U Peer Address',			{gsn_address, 0}).
@@ -40,7 +41,7 @@ handle_msg(Name, Socket, Req, IP, Port, #gtp{type = g_pdu, tei = TEI, seq_no = _
 	    Response = #gtp{version = v1, type = error_indication, tei = 0,
 			    seq_no = 0, ext_hdr = ExtHdr, ie = ResponseIEs},
 	    Data = gtp_packet:encode(Response),
-	    gtp_u_edp_port:sendto(Socket, IP, Port, Data),
+	    gtp_u_edp_port:sendto(Socket, IP, ?GTP1u_PORT, Data),
 	    gtp_u_edp_metrics:measure_request_error(Req, context_not_found),
 	    ok
     end;
