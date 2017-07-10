@@ -184,15 +184,17 @@ invalid_teid() ->
     [{doc, "Test that an PDU with an unknown TEID is silently ignored"
       " and that the GTP socket is not crashing"}].
 invalid_teid(Config) ->
-    S = make_gtp_socket(Config),
+    S1 = make_gtp_socket(Config, ?CLIENT_IP, ?GTP1u_PORT),
+    S2 = make_gtp_socket(Config, ?CLIENT_IP, 0),
 
     TEID = get_next_teid(),
     Msg =  #gtp{version = v1, type = g_pdu, tei = TEID, ie = <<"TESTDATA">>},
+    send_pdu(S2, Msg),
 
     ?match(#gtp{version = v1, type = error_indication, tei = 0,
 	       ie = #{?'Tunnel Endpoint Identifier Data I' :=
 			  #tunnel_endpoint_identifier_data_i{tei = TEID}}},
-	   send_recv_pdu(S, Msg)),
+	   recv_pdu(S1, ?TIMEOUT)),
 
     meck_validate(Config),
     ok.
@@ -560,9 +562,12 @@ remote_server(Config, Parent, Fun) ->
 make_gtp_socket(Config) ->
     make_gtp_socket(Config, ?CLIENT_IP).
 
-make_gtp_socket(_Config, IP) ->
-    {ok, S} = gen_udp:open(?GTP1u_PORT, [{ip, IP}, {active, false},
-					 binary, {reuseaddr, true}]),
+make_gtp_socket(Config, IP) ->
+    make_gtp_socket(Config, IP, ?GTP1u_PORT).
+
+make_gtp_socket(_Config, IP, Port) ->
+    {ok, S} = gen_udp:open(Port, [{ip, IP}, {active, false},
+				  binary, {reuseaddr, true}]),
     S.
 
 send_pdu(S, Msg) ->
