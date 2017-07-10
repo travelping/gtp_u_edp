@@ -1,7 +1,7 @@
 {application, gtp_u_edp, [
     {description, "3GPP GTPv1-U proxy"},
     {vsn, "0.1.0"},
-    {applications, [kernel, stdlib, lager, erlando, gtplib, gen_socket]},
+    {applications, [kernel, stdlib, lager, erlando, regine, gtplib, gen_socket]},
     {mod, {gtp_u_edp_app, []}},
     {registered, []},
     {env, []}
