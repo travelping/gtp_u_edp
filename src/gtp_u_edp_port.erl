@@ -47,9 +47,10 @@ start_sockets() ->
 		  end, Sockets),
     ok.
 
-start_link({Name, SocketOpts}) ->
+start_link({Name, SocketOpts0}) ->
     RegName = port_reg_name(Name),
     lager:info("RegName: ~p", [RegName]),
+    SocketOpts = validate_options(SocketOpts0),
     gen_server:start_link({local, RegName}, ?MODULE, [Name, SocketOpts], []).
 
 port_reg_name(Name) when is_atom(Name) ->
@@ -79,18 +80,60 @@ sendto(Socket, {_,_,_,_,_,_,_,_} = IP, Port, Data) ->
     gen_socket:sendto(Socket, {inet6, IP, Port}, Data).
 
 %%%===================================================================
+%%% Options Validation
+%%%===================================================================
+
+-define(SocketDefaults, [{ip, invalid}]).
+
+validate_options(Values0) ->
+    Values = proplists:unfold(Values0),
+    validate_options(fun validate_option/2, Values, ?SocketDefaults).
+
+validate_options(_Fun, []) ->
+        [];
+validate_options(Fun, [Opt | Tail]) when is_atom(Opt) ->
+        [Fun(Opt, true) | validate_options(Fun, Tail)];
+validate_options(Fun, [{Opt, Value} | Tail]) ->
+        [{Opt, Fun(Opt, Value)} | validate_options(Fun, Tail)].
+
+validate_options(Fun, Options, Defaults)
+  when is_list(Options), is_list(Defaults) ->
+    Opts = lists:ukeymerge(1, lists:keysort(1, Options), lists:keysort(1, Defaults)),
+    maps:from_list(validate_options(Fun, Opts)).
+
+validate_option(name, Value) when is_atom(Value) ->
+    Value;
+validate_option(type, 'gtp-u') ->
+    'gtp-u';
+validate_option(ip, Value)
+  when is_tuple(Value) andalso
+       (tuple_size(Value) == 4 orelse tuple_size(Value) == 8) ->
+    Value;
+validate_option(netdev, Value)
+  when is_list(Value); is_binary(Value) ->
+    Value;
+validate_option(netns, Value)
+  when is_list(Value); is_binary(Value) ->
+    Value;
+validate_option(freebind, Value) when is_boolean(Value) ->
+    Value;
+validate_option(reuseaddr, Value) when is_boolean(Value) ->
+    Value;
+validate_option(rcvbuf, Value)
+  when is_integer(Value) andalso Value > 0 ->
+    Value;
+validate_option(Opt, Value) ->
+    throw({error, {options, {Opt, Value}}}).
+
+%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Name, SocketOpts]) ->
+init([Name, #{ip := IP} = SocketOpts]) ->
     process_flag(trap_exit, true),
 
-    %% TODO: better config validation and handling
-    IP    = proplists:get_value(ip, SocketOpts),
-    NetNs = proplists:get_value(netns, SocketOpts),
-
-    {ok, Recv} = make_gtp_socket(NetNs, IP, ?GTP1u_PORT, SocketOpts),
-    {ok, Send} = make_gtp_socket(NetNs, IP, 0, SocketOpts),
+    {ok, Recv} = make_gtp_socket(IP, ?GTP1u_PORT, SocketOpts),
+    {ok, Send} = make_gtp_socket(IP, 0, SocketOpts),
 
     gtp_u_edp_metrics:init(Name),
 
@@ -213,39 +256,50 @@ ip2bin({A, B, C, D, E, F, G, H}) ->
 family({_,_,_,_}) -> inet;
 family({_,_,_,_,_,_,_,_}) -> inet6.
 
-make_gtp_socket(NetNs, IP, Port, Opts) when is_list(NetNs) ->
+make_gtp_socket(IP, Port, #{netns := NetNs} = Opts)
+  when is_list(NetNs) ->
     {ok, Socket} = gen_socket:socketat(NetNs, family(IP), dgram, udp),
     bind_gtp_socket(Socket, IP, Port, Opts);
-make_gtp_socket(_NetNs, IP, Port, Opts) ->
+make_gtp_socket(IP, Port, Opts) ->
     {ok, Socket} = gen_socket:socket(family(IP), dgram, udp),
     bind_gtp_socket(Socket, IP, Port, Opts).
 
 bind_gtp_socket(Socket, {_,_,_,_} = IP, Port, Opts) ->
-    case proplists:get_bool(freebind, Opts) of
-	true ->
-	    ok = gen_socket:setsockopt(Socket, sol_ip, freebind, true);
-	_ ->
-	    ok
-    end,
+    ok = socket_ip_freebind(Socket, Opts),
+    ok = socket_netdev(Socket, Opts),
     ok = gen_socket:bind(Socket, {inet4, IP, Port}),
     ok = gen_socket:setsockopt(Socket, sol_ip, recverr, true),
     ok = gen_socket:setsockopt(Socket, sol_ip, mtu_discover, 0),
     ok = gen_socket:input_event(Socket, true),
-    lists:foreach(socket_setopts(Socket, _), Opts),
+    maps:fold(fun(K, V, ok) -> ok = socket_setopts(Socket, K, V) end, ok, Opts),
     {ok, Socket};
 bind_gtp_socket(Socket, {_,_,_,_,_,_,_,_} = IP, Port, Opts) ->
     %% ok = gen_socket:setsockopt(Socket, sol_ip, recverr, true),
-    ok = gen_socket:setsockopt(Socket, sol_ip, mtu_discover, 0),
+    ok = socket_netdev(Socket, Opts),
     ok = gen_socket:bind(Socket, {inet6, IP, Port}),
-    lists:foreach(socket_setopts(Socket, _), Opts),
+    maps:fold(fun(K, V, ok) -> ok = socket_setopts(Socket, K, V) end, ok, Opts),
     ok = gen_socket:input_event(Socket, true),
     {ok, Socket}.
 
-socket_setopts(Socket, {netdev, Device})
-  when is_list(Device); is_binary(Device) ->
+socket_ip_freebind(Socket, #{freebind := true}) ->
+    gen_socket:setsockopt(Socket, sol_ip, freebind, true);
+socket_ip_freebind(_, _) ->
+    ok.
+
+socket_netdev(Socket, #{netdev := Device}) ->
     BinDev = iolist_to_binary([Device, 0]),
-    ok = gen_socket:setsockopt(Socket, sol_socket, bindtodevice, BinDev);
-socket_setopts(_Socket, _) ->
+    gen_socket:setsockopt(Socket, sol_socket, bindtodevice, BinDev);
+socket_netdev(_, _) ->
+    ok.
+
+socket_setopts(Socket, rcvbuf, Size) when is_integer(Size) ->
+    case gen_socket:setsockopt(Socket, sol_socket, rcvbufforce, Size) of
+	ok -> ok;
+	_  -> gen_socket:setsockopt(Socket, sol_socket, rcvbuf, Size)
+    end;
+socket_setopts(Socket, reuseaddr, true) ->
+    ok = gen_socket:setsockopt(Socket, sol_socket, reuseaddr, true);
+socket_setopts(_Socket, _, _) ->
     ok.
 
 handle_input(Socket, State) ->
