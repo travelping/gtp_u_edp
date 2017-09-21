@@ -59,8 +59,19 @@ port_reg_name(Name) when is_atom(Name) ->
 
 send(Pid, Req, IP, Data) ->
     gen_server:cast(Pid, {send, Req, IP, Data}).
-send_error_indication(Pid, Req, IP, TEI) ->
-    gen_server:cast(Pid, {send_error_indication, Req, IP, TEI}).
+
+send_error_indication(Pid, Req, IP, TEI)
+  when is_pid(Pid) ->
+    gen_server:cast(Pid, {send_error_indication, Req, IP, TEI});
+
+send_error_indication(Socket, IP, TEI, ExtHdr) ->
+    {_, LocalIP, _} = gen_socket:getsockname(Socket),
+    ResponseIEs = [#tunnel_endpoint_identifier_data_i{tei = TEI},
+		   #gsn_address{address = ip2bin(LocalIP)}],
+    Response = #gtp{version = v1, type = error_indication, tei = 0,
+		    seq_no = undefined, ext_hdr = ExtHdr, ie = ResponseIEs},
+    Data = gtp_packet:encode(Response),
+    gtp_u_edp_port:sendto(Socket, IP, ?GTP1u_PORT, Data).
 
 packet_in(Pid, Req, IP, Port, Msg) ->
     gen_server:cast(Pid, {packet_in, Req, IP, Port, Msg}).
@@ -203,16 +214,8 @@ handle_cast({send, Req, IP, Data}, #state{send = Send} = State) ->
     end,
     {noreply, State};
 
-handle_cast({send_error_indication, _Req, IP, TEI},
-	    #state{ip = LocalIP, send = Send} = State) ->
-
-    IndicationIEs = [#tunnel_endpoint_identifier_data_i{tei = TEI},
-		   #gsn_address{address = ip2bin(LocalIP)}],
-    Indication = #gtp{version = v1, type = error_indication, tei = 0,
-		    seq_no = 0, ext_hdr = [], ie = IndicationIEs},
-    Data = gtp_packet:encode(Indication),
-
-    case sendto(Send, IP, ?GTP1u_PORT, Data) of
+handle_cast({send_error_indication, _Req, IP, TEI}, #state{send = Send} = State) ->
+    case send_error_indication(Send, IP, TEI, []) of
 	{ok, _} ->
 	    ok;
 	Other ->

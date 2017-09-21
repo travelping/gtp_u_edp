@@ -191,9 +191,10 @@ invalid_teid(Config) ->
     Msg =  #gtp{version = v1, type = g_pdu, tei = TEID, ie = <<"TESTDATA">>},
     send_pdu(S2, Msg),
 
-    ?match(#gtp{version = v1, type = error_indication, tei = 0,
-	       ie = #{?'Tunnel Endpoint Identifier Data I' :=
-			  #tunnel_endpoint_identifier_data_i{tei = TEID}}},
+    ?match(#gtp{version = v1, type = error_indication,
+		tei = 0, seq_no = undefined,
+		ie = #{?'Tunnel Endpoint Identifier Data I' :=
+			   #tunnel_endpoint_identifier_data_i{tei = TEID}}},
 	   recv_pdu(S1, ?TIMEOUT)),
 
     meck_validate(Config),
@@ -465,7 +466,8 @@ remote_invalid(Config) ->
 		?match(#gtp{type = g_pdu, tei = FwdRemoteTEI}, Msg),
 
 		RespIE = [#tunnel_endpoint_identifier_data_i{tei = FwdRemoteTEI}],
-		Resp = #gtp{version = v1, type = error_indication, tei = 0, ie = RespIE},
+		Resp = #gtp{version = v1, type = error_indication, tei = 0,
+			    seq_no = undefined, ie = RespIE},
 		send_pdu(Socket, ?PROXY_GSN, Resp),
 		done
 	end,
@@ -474,7 +476,8 @@ remote_invalid(Config) ->
     S = make_gtp_socket(Config),
 
     Msg = #gtp{version = v1, type = g_pdu, tei = LocalTEI, ie = <<"TESTDATA">>},
-    ?match(#gtp{version = v1, type = error_indication, tei = 0,
+    ?match(#gtp{version = v1, type = error_indication,
+		tei = 0, seq_no = undefined,
 		ie = #{?'Tunnel Endpoint Identifier Data I' :=
 			   #tunnel_endpoint_identifier_data_i{tei = LocalTEI}}},
 	   send_recv_pdu(S, Msg)),
@@ -518,7 +521,7 @@ local_invalid(Config) ->
     EchoFun =
 	fun(Socket) ->
 		Msg = recv_pdu(Socket, ?PROXY_GSN, ?TIMEOUT),
-		?match(#gtp{type = error_indication, tei = 0,
+		?match(#gtp{type = error_indication, tei = 0, seq_no = undefined,
 			    ie = #{?'Tunnel Endpoint Identifier Data I' :=
 				       #tunnel_endpoint_identifier_data_i{tei = FwdLocalTEI}}},
 		       Msg),
@@ -529,7 +532,8 @@ local_invalid(Config) ->
     S = make_gtp_socket(Config),
 
     MsgIE = [#tunnel_endpoint_identifier_data_i{tei = RemoteTEI}],
-    Msg = #gtp{version = v1, type = error_indication, tei = 0, ie = MsgIE},
+    Msg = #gtp{version = v1, type = error_indication, tei = 0,
+	       seq_no = undefined, ie = MsgIE},
     send_pdu(S, Msg),
 
     receive
