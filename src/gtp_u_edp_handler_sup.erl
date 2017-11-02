@@ -10,7 +10,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, add_tunnel/7]).
+-export([start_link/0, create_session/4]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -24,8 +24,8 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Owner, Handler, HandlerOpts) ->
-    supervisor:start_child(?SERVER, [Port, PeerIP, LocalTEI, RemoteTEI, Owner, Handler, HandlerOpts]).
+create_session(Name, Owner, SEID, SER) ->
+    supervisor:start_child(?SERVER, [Name, Owner, SEID, SER]).
 
 %% ===================================================================
 %% Supervisor callbacks
@@ -33,4 +33,4 @@ add_tunnel(Port, PeerIP, LocalTEI, RemoteTEI, Owner, Handler, HandlerOpts) ->
 
 init([]) ->
     {ok, {{simple_one_for_one, 5, 10},
-	  [{gtp_u_edp_handler, {gtp_u_edp_handler, start_link, []}, temporary, 1000, worker, [gtp_u_edp_handler]}]}}.
+	  [{gtp_u_edp_forwarder, {gtp_u_edp_forwarder, start_link, []}, temporary, 1000, worker, [gtp_u_edp_forwarder]}]}}.

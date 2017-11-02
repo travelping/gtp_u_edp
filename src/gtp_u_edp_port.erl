@@ -160,34 +160,22 @@ handle_call({bind, Owner}, _From, #state{ip = IP} = State) ->
     Reply = {ok, self(), IP},
     {reply, Reply, State#state{owner = Owner}};
 
-handle_call({create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args} = _Request,
-	    {Owner, _Tag} = _From, #state{name = Name} = State) ->
+handle_call({SEID, session_establishment_request, SER} = _Request,
+	     {Owner, _Tag} = _From, #state{name = Name} = State) ->
 
-    lager:info("EDP Port Create PDP Context Call ~p: ~p", [_From, _Request]),
-    Reply = gtp_u_edp_handler:add_tunnel(Name, PeerIP, LocalTEI, RemoteTEI, Owner, Args),
+    lager:info("EDP Port Session Establishment Request ~p: ~p", [_From, _Request]),
+    Reply = gtp_u_edp_forwarder:create_session(Name, Owner, SEID, SER),
 
     {reply, Reply, State};
 
-handle_call({update_pdp_context, _, LocalTEI, _, _} = Request,
-	    _From, #state{name = Name} = State) ->
-
-    lager:info("EDP Port Update PDP Context Call ~p: ~p", [_From, Request]),
+handle_call({SEID, SessionRequest, _} = Request,
+	    _From, #state{name = Name} = State)
+  when SessionRequest =:= session_modification_request;
+       SessionRequest =:= session_deletion_request ->
+    lager:info("EDP Port Call ~p: SEID: ~p, Req: ~p", [_From, SEID, SessionRequest]),
     Reply =
-	case gtp_u_edp:lookup({Name, LocalTEI}) of
-	    Pid when is_pid(Pid) ->
-		gen_server:call(Pid, Request);
-	    _ ->
-		{error, not_found}
-	end,
-    {reply, Reply, State};
-
-handle_call({delete_pdp_context, _, LocalTEI, _, _} = Request,
-	    _From, #state{name = Name} = State) ->
-
-    lager:info("EDP Port Delete PDP Context Call ~p: ~p", [_From, Request]),
-    Reply =
-	case gtp_u_edp:lookup({Name, LocalTEI}) of
-	    Pid when is_pid(Pid) ->
+	case gtp_u_edp:lookup({Name, {seid, SEID}}) of
+	    {Pid, _} when is_pid(Pid) ->
 		gen_server:call(Pid, Request);
 	    _ ->
 		{error, not_found}
@@ -393,7 +381,7 @@ handle_msg_1(Socket, Req, IP, Port,
 handle_msg_1(Socket, Req, IP, Port,
 	     #gtp{version = v1} = Msg,
 	     #state{name = Name} = State) ->
-    gtp_u_edp_handler:handle_msg(Name, Socket, Req, IP, Port, Msg),
+    gtp_u_edp_forwarder:handle_msg(Name, Socket, Req, IP, Port, Msg),
     {noreply, State};
 
 handle_msg_1(_Socket, _Req, _IP, _Port, _Msg, State) ->

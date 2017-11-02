@@ -52,7 +52,7 @@
 		  %% force lager into async logging, otherwise
 		  %% the test will timeout randomly
 		  {async_threshold, undefined},
-		  {handlers, [{lager_console_backend, info}]}
+		  {handlers, [{lager_console_backend, [{level, info}]}]}
 		 ]},
 
 	 {gtp_u_edp, [{sockets,
@@ -96,14 +96,13 @@ all() ->
      echo_request,
      bind,
      clear,
-     create_pdp_context,
-     create_invalid_pdp_context,
-     create_pdp_context_clear,
-     delete_pdp_context,
-     update_pdp_context,
+     session_establishment_request,
+     session_establishment_request_invalid_if,
+     session_establishment_request_clear,
+     session_deletion_request,
+     session_modification_request,
      forward_data,
-     remote_invalid,
-     local_invalid
+     error_indication
     ].
 
 %%%===================================================================
@@ -143,25 +142,21 @@ load_config(AppCfg) ->
 meck_init(_Config) ->
     ok = meck:new(gtp_u_edp, [passthrough, no_link]),
     ok = meck:new(gtp_u_edp_port, [passthrough, no_link]),
-    ok = meck:new(gtp_u_edp_handler, [passthrough, no_link]),
     ok = meck:new(gtp_u_edp_forwarder, [passthrough, no_link]).
 
 meck_reset(_Config) ->
     meck:reset(gtp_u_edp),
     meck:reset(gtp_u_edp_port),
-    meck:reset(gtp_u_edp_handler),
     meck:reset(gtp_u_edp_forwarder).
 
 meck_unload(_Config) ->
     meck:unload(gtp_u_edp),
     meck:unload(gtp_u_edp_port),
-    meck:unload(gtp_u_edp_handler),
     meck:unload(gtp_u_edp_forwarder).
 
 meck_validate(_Config) ->
     ?equal(true, meck:validate(gtp_u_edp)),
     ?equal(true, meck:validate(gtp_u_edp_port)),
-    ?equal(true, meck:validate(gtp_u_edp_handler)),
     ?equal(true, meck:validate(gtp_u_edp_forwarder)).
 
 %%%===================================================================
@@ -235,45 +230,56 @@ clear(Config) ->
     meck_validate(Config),
     ok.
 
-create_pdp_context() ->
-    [{doc, "Test GTP-C to DP create_pdp_context call"}].
-create_pdp_context(Config) ->
-    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, grx}),
+session_establishment_request() ->
+    [{doc, "CP to DP Session Establishment Request"}].
+session_establishment_request(Config) ->
+    SEID = get_next_teid(),
+    LeftIntf = 'grx',
+    LeftTEI = get_next_teid(),
+    LeftPeerIP = ?CLIENT_IP,
+    LeftPeerTEI = get_next_teid(),
+    RightIntf = 'proxy-grx',
+    RightTEI = get_next_teid(),
+    RightPeerIP = ?FINAL_GSN,
+    RightPeerTEI = get_next_teid(),
+
+    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, LeftIntf}),
     ok = gen_server:call(Pid, clear),
 
-    PeerIP = ?CLIENT_IP,
-    LocalTEI = get_next_teid(),
-    RemoteTEI = get_next_teid(),
-    FwdRemoteIP = ?FINAL_GSN,
-    FwdLocalTEI = get_next_teid(),
-    FwdRemoteTEI = get_next_teid(),
-    Args = {forward, ['proxy-grx', FwdRemoteIP, FwdLocalTEI, FwdRemoteTEI]},
-    Request = {create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
+    Request = make_forward_session(
+		SEID,
+		LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
+		RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
     ?match({ok, _}, gen_server:call(Pid, Request)),
-    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+    validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
     ok = gen_server:call(Pid, clear),
 
     meck_validate(Config),
     ok.
 
-create_invalid_pdp_context() ->
-    [{doc, "Test error handling in create_pdp_context call"}].
-create_invalid_pdp_context(Config) ->
-    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, grx}),
+session_establishment_request_invalid_if() ->
+    [{doc, "CP to DP Session Establishment Request with an Invalid Interface"}].
+session_establishment_request_invalid_if(Config) ->
+    SEID = get_next_teid(),
+    LeftIntf = 'grx',
+    LeftTEI = get_next_teid(),
+    LeftPeerIP = ?CLIENT_IP,
+    LeftPeerTEI = get_next_teid(),
+    RightIntf = 'invalid-grx',
+    RightTEI = get_next_teid(),
+    RightPeerIP = ?FINAL_GSN,
+    RightPeerTEI = get_next_teid(),
+
+    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, LeftIntf}),
     ok = gen_server:call(Pid, clear),
 
-    PeerIP = ?CLIENT_IP,
-    LocalTEI = get_next_teid(),
-    RemoteTEI = get_next_teid(),
-    FwdRemoteIP = ?FINAL_GSN,
-    FwdLocalTEI = get_next_teid(),
-    FwdRemoteTEI = get_next_teid(),
-
-    Args = {forward, ['invalid-grx', FwdRemoteIP, FwdLocalTEI, FwdRemoteTEI]},
-    Request = {create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
+    Request = make_forward_session(
+		SEID,
+		LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
+		RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
     ?match({error,{error,invalid_port}}, gen_server:call(Pid, Request)),
 
@@ -281,110 +287,161 @@ create_invalid_pdp_context(Config) ->
 
     meck_validate(Config),
     ok.
-create_pdp_context_clear() ->
-    [{doc, "Test that a DP clear really removes all existing forwarders"}].
-create_pdp_context_clear(Config) ->
-    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, grx}),
+
+session_establishment_request_clear() ->
+    [{doc, "DP clear removes all existing forwarders"}].
+session_establishment_request_clear(Config) ->
+    SEID = get_next_teid(),
+    LeftIntf = 'grx',
+    LeftTEI = get_next_teid(),
+    LeftPeerIP = ?CLIENT_IP,
+    LeftPeerTEI = get_next_teid(),
+    RightIntf = 'proxy-grx',
+    RightTEI = get_next_teid(),
+    RightPeerIP = ?FINAL_GSN,
+    RightPeerTEI = get_next_teid(),
+
+    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, LeftIntf}),
     ok = gen_server:call(Pid, clear),
 
-    PeerIP = ?CLIENT_IP,
-    LocalTEI = get_next_teid(),
-    RemoteTEI = get_next_teid(),
-    FwdRemoteIP = ?FINAL_GSN,
-    FwdLocalTEI = get_next_teid(),
-    FwdRemoteTEI = get_next_teid(),
-    Args = {forward, ['proxy-grx', FwdRemoteIP, FwdLocalTEI, FwdRemoteTEI]},
-    Request = {create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
+    Request = make_forward_session(
+		SEID,
+		LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
+		RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
     ?match({ok, _}, gen_server:call(Pid, Request)),
-    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+    validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
     ok = gen_server:call(Pid, clear),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
-    ok = meck:wait(4, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
+    ok = meck:wait(5, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
     ?equal([], gtp_u_edp:all()),
 
     meck_validate(Config),
     ok.
 
-delete_pdp_context() ->
-    [{doc, "Test GTP-C to DP delete_pdp_context call"}].
-delete_pdp_context(Config) ->
-    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, grx}),
+session_deletion_request() ->
+    [{doc, "CP to DP Session Deletion Request"}].
+session_deletion_request(Config) ->
+    SEID = get_next_teid(),
+    InvalidSEID = get_next_teid(),
+    LeftIntf = 'grx',
+    LeftTEI = get_next_teid(),
+    LeftPeerIP = ?CLIENT_IP,
+    LeftPeerTEI = get_next_teid(),
+    RightIntf = 'proxy-grx',
+    RightTEI = get_next_teid(),
+    RightPeerIP = ?FINAL_GSN,
+    RightPeerTEI = get_next_teid(),
+
+    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, LeftIntf}),
     ok = gen_server:call(Pid, clear),
 
-    PeerIP = ?CLIENT_IP,
-    LocalTEI = get_next_teid(),
-    InvalidLocalTEI = get_next_teid(),
-    RemoteTEI = get_next_teid(),
-    FwdRemoteIP = ?FINAL_GSN,
-    FwdLocalTEI = get_next_teid(),
-    FwdRemoteTEI = get_next_teid(),
-    Args = {forward, ['proxy-grx', FwdRemoteIP, FwdLocalTEI, FwdRemoteTEI]},
-    Request0 = {create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
-    Request1 = {delete_pdp_context, PeerIP, InvalidLocalTEI, RemoteTEI, Args},
-    Request2 = {delete_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
+    Request1 = make_forward_session(
+		 SEID,
+		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
+		 RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
+    Request2 = {InvalidSEID, session_deletion_request, #{}},
+    Request3 = {SEID, session_deletion_request, #{}},
 
-    ?match({ok, _}, gen_server:call(Pid, Request0)),
-    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+    ?match({ok, _}, gen_server:call(Pid, Request1)),
+    validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
-    ?match({error,not_found}, gen_server:call(Pid, Request1)),
-    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+    ?match({error,not_found}, gen_server:call(Pid, Request2)),
+    validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
-    ?equal(ok, gen_server:call(Pid, Request2)),
+    ?match(ok, gen_server:call(Pid, Request3)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
-    ok = meck:wait(4, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
+    ok = meck:wait(5, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
     ?equal([], gtp_u_edp:all()),
 
     meck_validate(Config),
     ok.
 
-update_pdp_context() ->
-    [{doc, "Test GTP-C to DP update_pdp_context call"}].
-update_pdp_context(Config) ->
-    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, grx}),
+session_modification_request() ->
+    [{doc, "CP to DP Session Modification Request"}].
+session_modification_request(Config) ->
+    SEID = get_next_teid(),
+    InvalidSEID = get_next_teid(),
+    LeftIntf = 'grx',
+    LeftTEI = get_next_teid(),
+    LeftPeerIP = ?CLIENT_IP,
+    LeftPeerTEI = get_next_teid(),
+    RightIntf = 'proxy-grx',
+    RightTEI = get_next_teid(),
+    RightPeerIP = ?FINAL_GSN,
+    RightPeerTEI = get_next_teid(),
+
+    UpdLeftTEI = get_next_teid(),
+    UpdLeftPeerIP = ?CLIENT_IP,
+    UpdLeftPeerTEI = get_next_teid(),
+
+    UpdRightTEI = get_next_teid(),
+    UpdRightPeerIP = ?FINAL_GSN,
+    UpdRightPeerTEI = get_next_teid(),
+
+    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, LeftIntf}),
     ok = gen_server:call(Pid, clear),
 
-    PeerIP = ?CLIENT_IP,
-    LocalTEI = get_next_teid(),
-    InvalidLocalTEI = get_next_teid(),
-    RemoteTEI = get_next_teid(),
-    FwdRemoteIP = ?FINAL_GSN,
-    FwdLocalTEI = get_next_teid(),
-    FwdRemoteTEI = get_next_teid(),
-    Args = {forward, ['proxy-grx', FwdRemoteIP, FwdLocalTEI, FwdRemoteTEI]},
-    Request0 = {create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
+    Request1 = make_forward_session(
+		 SEID,
+		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
+		 RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
-    UpdPeerIP = ?CLIENT_IP,
-    UpdRemoteTEI = get_next_teid(),
-    Request1 = {update_pdp_context, UpdPeerIP, InvalidLocalTEI, UpdRemoteTEI, Args},
-    Request2 = {update_pdp_context, UpdPeerIP, LocalTEI, UpdRemoteTEI, Args},
-    Request3 = {delete_pdp_context, UpdPeerIP, LocalTEI, UpdRemoteTEI, Args},
+    ?match({ok, _}, gen_server:call(Pid, Request1)),
+    validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
-    ?match({ok, _}, gen_server:call(Pid, Request0)),
-    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+    Request2 = make_update_far(
+		 InvalidSEID, 1,
+		 LeftIntf,  UpdLeftPeerIP, UpdLeftPeerTEI),
 
-    ?match({error,not_found}, gen_server:call(Pid, Request1)),
-    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+    ?match({error,not_found}, gen_server:call(Pid, Request2)),
+    validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
-    ?match(ok, gen_server:call(Pid, Request2)),
-    validate_tunnel(grx, LocalTEI, UpdPeerIP, UpdRemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+    Request3 = make_update_far(
+		 SEID, 1,
+		 LeftIntf,  UpdLeftPeerIP, UpdLeftPeerTEI),
 
-    ?equal(ok, gen_server:call(Pid, Request3)),
+    ?match(ok, gen_server:call(Pid, Request3)),
+    validate_tunnel(LeftIntf, LeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
+
+    Request4 = make_update_far(
+		 SEID, 2,
+		 RightIntf, UpdRightPeerIP, UpdRightPeerTEI),
+
+    ?match(ok, gen_server:call(Pid, Request4)),
+    validate_tunnel(LeftIntf,  LeftTEI,  UpdLeftPeerIP,  UpdLeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, UpdRightPeerIP, UpdRightPeerTEI),
+
+    Request5 = make_update_pdr(SEID, 1, LeftIntf, UpdLeftTEI),
+
+    ?match(ok, gen_server:call(Pid, Request5)),
+    validate_tunnel(LeftIntf, UpdLeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, UpdRightPeerIP, UpdRightPeerTEI),
+
+    Request6 = make_update_pdr(SEID, 2, RightIntf, UpdRightTEI),
+
+    ?match(ok, gen_server:call(Pid, Request6)),
+    validate_tunnel(LeftIntf, UpdLeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
+    validate_tunnel(RightIntf, UpdRightTEI, UpdRightPeerIP, UpdRightPeerTEI),
+
+    Request7 = {SEID, session_deletion_request, #{}},
+    ?equal(ok, gen_server:call(Pid, Request7)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
-    ok = meck:wait(4, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
+    %% wait for 5 monitors, one for each TEI and one for the SEID
+    ok = meck:wait(5, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
     ?equal([], gtp_u_edp:all()),
 
     meck_validate(Config),
@@ -393,36 +450,42 @@ update_pdp_context(Config) ->
 forward_data() ->
     [{doc, "Test forwarding data works"}].
 forward_data(Config) ->
-    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, grx}),
+    SEID = get_next_teid(),
+    LeftIntf = 'grx',
+    LeftTEI = get_next_teid(),
+    LeftPeerIP = ?CLIENT_IP,
+    LeftPeerTEI = get_next_teid(),
+    RightIntf = 'proxy-grx',
+    RightTEI = get_next_teid(),
+    RightPeerIP = ?FINAL_GSN,
+    RightPeerTEI = get_next_teid(),
+
+    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, LeftIntf}),
     ok = gen_server:call(Pid, clear),
 
-    PeerIP = ?CLIENT_IP,
-    LocalTEI = get_next_teid(),
-    RemoteTEI = get_next_teid(),
-    FwdRemoteIP = ?FINAL_GSN,
-    FwdLocalTEI = get_next_teid(),
-    FwdRemoteTEI = get_next_teid(),
-    Args = {forward, ['proxy-grx', FwdRemoteIP, FwdLocalTEI, FwdRemoteTEI]},
-    Request0 = {create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
-    Request1 = {delete_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
+    Request1 = make_forward_session(
+		 SEID,
+		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
+		 RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
+    Request2 = {SEID, session_deletion_request, #{}},
 
-    ?match({ok, _}, gen_server:call(Pid, Request0)),
-    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+    ?match({ok, _}, gen_server:call(Pid, Request1)),
+    validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
     EchoFun =
 	fun(Socket) ->
 		Msg = recv_pdu(Socket, ?PROXY_GSN, ?TIMEOUT),
-		?match(#gtp{type = g_pdu, tei = FwdRemoteTEI}, Msg),
-		send_pdu(Socket, ?PROXY_GSN, Msg#gtp{tei = FwdLocalTEI}),
+		?match(#gtp{type = g_pdu, tei = RightPeerTEI}, Msg),
+		send_pdu(Socket, ?PROXY_GSN, Msg#gtp{tei = RightTEI}),
 		done
 	end,
     {ok, EchoPid} = proc_lib:start_link(?MODULE, remote_server, [Config, self(), EchoFun]),
 
     S = make_gtp_socket(Config),
 
-    Msg = #gtp{version = v1, type = g_pdu, tei = LocalTEI, ie = <<"TESTDATA">>},
-    ?match(#gtp{type = g_pdu, tei = RemoteTEI}, send_recv_pdu(S, Msg)),
+    Msg = #gtp{version = v1, type = g_pdu, tei = LeftTEI, ie = <<"TESTDATA">>},
+    ?match(#gtp{type = g_pdu, tei = LeftPeerTEI}, send_recv_pdu(S, Msg)),
 
     receive
 	{EchoPid, done} -> ok
@@ -430,42 +493,75 @@ forward_data(Config) ->
 	    ct:fail(timeout)
     end,
 
-    ?equal(ok, gen_server:call(Pid, Request1)),
+    ?equal(ok, gen_server:call(Pid, Request2)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
-    ok = meck:wait(4, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
+    ok = meck:wait(5, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
     ?equal([], gtp_u_edp:all()),
 
     meck_validate(Config),
     ok.
 
-remote_invalid() ->
-    [{doc, "Test that a error returned from the remote is handled"}].
-remote_invalid(Config) ->
-    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, grx}),
+error_indication() ->
+    [{doc, "Test that a Error Indication"}].
+error_indication(Config) ->
+    SEID = get_next_teid(),
+    LeftIntf = 'grx',
+    InvalidLeftTEI = get_next_teid(),
+    LeftTEI = get_next_teid(),
+    LeftPeerIP = ?CLIENT_IP,
+    LeftPeerTEI = get_next_teid(),
+    RightIntf = 'proxy-grx',
+    RightTEI = get_next_teid(),
+    RightPeerIP = ?FINAL_GSN,
+    RightPeerTEI = get_next_teid(),
+
+    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, LeftIntf}),
     ok = gen_server:call(Pid, clear),
 
-    PeerIP = ?CLIENT_IP,
-    LocalTEI = get_next_teid(),
-    RemoteTEI = get_next_teid(),
-    FwdRemoteIP = ?FINAL_GSN,
-    FwdLocalTEI = get_next_teid(),
-    FwdRemoteTEI = get_next_teid(),
-    Args = {forward, ['proxy-grx', FwdRemoteIP, FwdLocalTEI, FwdRemoteTEI]},
-    Request0 = {create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
-    Request1 = {delete_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
+    Request1 = make_forward_session(
+		 SEID,
+		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
+		 RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
+    Request2 = {SEID, session_deletion_request, #{}},
 
-    ?match({ok, _}, gen_server:call(Pid, Request0)),
-    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
+    ?match({ok, _}, gen_server:call(Pid, Request1)),
+    validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
+
+    S = make_gtp_socket(Config),
+
+    Msg1 = #gtp{version = v1, type = g_pdu, tei = InvalidLeftTEI, ie = <<"TESTDATA">>},
+    ?match(#gtp{version = v1, type = error_indication,
+		tei = 0, seq_no = undefined,
+		ie = #{?'Tunnel Endpoint Identifier Data I' :=
+			   #tunnel_endpoint_identifier_data_i{tei = InvalidLeftTEI}}},
+	   send_recv_pdu(S, Msg1)),
+
+    Msg2IE = [#tunnel_endpoint_identifier_data_i{tei = LeftPeerTEI}],
+    Msg2 = #gtp{version = v1, type = error_indication, tei = 0,
+		seq_no = undefined, ie = Msg2IE},
+    send_pdu(S, Msg2),
+
+    receive
+	{SEID, session_report_request, IEs2} ->
+	    ?match(#{report_type := [error_indication_report],
+		     error_indication_report :=
+			 [#{remote_f_teid :=
+				#f_teid{ipv4 = ?CLIENT_IP, teid = LeftPeerTEI}
+			   }]
+		    }, IEs2)
+    after ?TIMEOUT ->
+	    ct:fail(timeout)
+    end,
 
     EchoFun =
 	fun(Socket) ->
 		Msg = recv_pdu(Socket, ?PROXY_GSN, ?TIMEOUT),
-		?match(#gtp{type = g_pdu, tei = FwdRemoteTEI}, Msg),
+		?match(#gtp{type = g_pdu, tei = RightPeerTEI}, Msg),
 
-		RespIE = [#tunnel_endpoint_identifier_data_i{tei = FwdRemoteTEI}],
+		RespIE = [#tunnel_endpoint_identifier_data_i{tei = RightPeerTEI}],
 		Resp = #gtp{version = v1, type = error_indication, tei = 0,
 			    seq_no = undefined, ie = RespIE},
 		send_pdu(Socket, ?PROXY_GSN, Resp),
@@ -473,14 +569,8 @@ remote_invalid(Config) ->
 	end,
     {ok, EchoPid} = proc_lib:start_link(?MODULE, remote_server, [Config, self(), EchoFun]),
 
-    S = make_gtp_socket(Config),
-
-    Msg = #gtp{version = v1, type = g_pdu, tei = LocalTEI, ie = <<"TESTDATA">>},
-    ?match(#gtp{version = v1, type = error_indication,
-		tei = 0, seq_no = undefined,
-		ie = #{?'Tunnel Endpoint Identifier Data I' :=
-			   #tunnel_endpoint_identifier_data_i{tei = LocalTEI}}},
-	   send_recv_pdu(S, Msg)),
+    Msg3 = #gtp{version = v1, type = g_pdu, tei = LeftTEI, ie = <<"TESTDATA">>},
+    send_pdu(S, Msg3),
 
     receive
 	{EchoPid, done} -> ok
@@ -488,65 +578,34 @@ remote_invalid(Config) ->
 	    ct:fail(timeout)
     end,
 
-    ?equal(ok, gen_server:call(Pid, Request1)),
-
-    %% gtp_u_edp:all/0 bypasses the reg server
-    ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
-    ok = meck:wait(4, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
-    ?equal([], gtp_u_edp:all()),
-
-    meck_validate(Config),
-    ok.
-
-local_invalid() ->
-    [{doc, "Test that a error is forwardedto the remote is handled"}].
-local_invalid(Config) ->
-    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, grx}),
-    ok = gen_server:call(Pid, clear),
-
-    PeerIP = ?CLIENT_IP,
-    LocalTEI = get_next_teid(),
-    RemoteTEI = get_next_teid(),
-    FwdRemoteIP = ?FINAL_GSN,
-    FwdLocalTEI = get_next_teid(),
-    FwdRemoteTEI = get_next_teid(),
-    Args = {forward, ['proxy-grx', FwdRemoteIP, FwdLocalTEI, FwdRemoteTEI]},
-    Request0 = {create_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
-    Request1 = {delete_pdp_context, PeerIP, LocalTEI, RemoteTEI, Args},
-
-    ?match({ok, _}, gen_server:call(Pid, Request0)),
-    validate_tunnel(grx, LocalTEI, PeerIP, RemoteTEI),
-    validate_tunnel('proxy-grx', FwdLocalTEI, FwdRemoteIP, FwdRemoteTEI),
-
-    EchoFun =
-	fun(Socket) ->
-		Msg = recv_pdu(Socket, ?PROXY_GSN, ?TIMEOUT),
-		?match(#gtp{type = error_indication, tei = 0, seq_no = undefined,
-			    ie = #{?'Tunnel Endpoint Identifier Data I' :=
-				       #tunnel_endpoint_identifier_data_i{tei = FwdLocalTEI}}},
-		       Msg),
-		done
-	end,
-    {ok, EchoPid} = proc_lib:start_link(?MODULE, remote_server, [Config, self(), EchoFun]),
-
-    S = make_gtp_socket(Config),
-
-    MsgIE = [#tunnel_endpoint_identifier_data_i{tei = RemoteTEI}],
-    Msg = #gtp{version = v1, type = error_indication, tei = 0,
-	       seq_no = undefined, ie = MsgIE},
-    send_pdu(S, Msg),
-
     receive
-	{EchoPid, done} -> ok
+	{SEID, session_report_request, IEs3} ->
+	    ?match(#{report_type := [error_indication_report],
+		     error_indication_report :=
+			 [#{remote_f_teid :=
+				#f_teid{ipv4 = ?FINAL_GSN, teid = RightPeerTEI}
+			   }]
+		    }, IEs3)
     after ?TIMEOUT ->
 	    ct:fail(timeout)
     end,
 
-    ?equal(ok, gen_server:call(Pid, Request1)),
+    Msg4IE = [#tunnel_endpoint_identifier_data_i{tei = InvalidLeftTEI}],
+    Msg4 = #gtp{version = v1, type = error_indication, tei = 0,
+		seq_no = undefined, ie = Msg4IE},
+    send_pdu(S, Msg4),
+
+    receive
+	Any -> ct:fail(Any)
+    after 500 ->
+	    ok
+    end,
+
+    ?equal(ok, gen_server:call(Pid, Request2)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
-    ok = meck:wait(4, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
+    ok = meck:wait(5, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
     ?equal([], gtp_u_edp:all()),
 
     meck_validate(Config),
@@ -665,6 +724,53 @@ make_g_pdu(TEID, Bin) ->
     #gtp{version = v1, type = g_pdu, tei = TEID, ie = Bin}.
 
 validate_tunnel(Name, LocalTEI, RemoteIP, RemoteTEI) ->
-    ?match(Pid when is_pid(Pid), gtp_u_edp:lookup({Name, LocalTEI})),
-    ?match(Pid when is_pid(Pid), gtp_u_edp:lookup({Name, {remote, RemoteIP, RemoteTEI}})),
+    ?match({Pid, _} when is_pid(Pid), gtp_u_edp:lookup({Name, LocalTEI})),
+    ?match({Pid, _} when is_pid(Pid), gtp_u_edp:lookup({Name, {remote, RemoteIP, RemoteTEI}})),
     ok.
+
+make_forward_session(SEID,
+		     LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
+		     RightIntf, RightTEI, RightPeerIP, RightPeerTEI) ->
+    IEs = #{cp_f_seid => SEID,
+	    create_pdr => [#{pdr_id => 1, precedence => 100,
+			     pdi => #{source_interface => LeftIntf,
+				      local_f_teid => #f_teid{teid = LeftTEI}},
+			     outer_header_removal => true, far_id => 2},
+			   #{pdr_id => 2, precedence => 100,
+			     pdi => #{source_interface => RightIntf,
+				      local_f_teid => #f_teid{teid = RightTEI}},
+			     outer_header_removal => true, far_id => 1}],
+	    create_far => [#{far_id => 1, apply_action => [forward],
+			     forwarding_parameters => #{
+			       destination_interface => LeftIntf,
+			       outer_header_creation =>
+				   #f_teid{ipv4 = LeftPeerIP,
+					   teid = LeftPeerTEI}}},
+			   #{far_id => 2, apply_action => [forward],
+			     forwarding_parameters => #{
+			       destination_interface => RightIntf,
+			       outer_header_creation =>
+				   #f_teid{ipv4 = RightPeerIP,
+					   teid = RightPeerTEI}}}]
+	   },
+    {SEID, session_establishment_request, IEs}.
+
+make_update_pdr(SEID, RuleId, Intf, TEI) ->
+    IEs = #{cp_f_seid => SEID,
+	    update_pdr => [#{pdr_id => RuleId, precedence => 100,
+			     pdi => #{source_interface => Intf,
+				      local_f_teid => #f_teid{teid = TEI}},
+			     outer_header_removal => true, far_id => RuleId}]
+	   },
+    {SEID, session_modification_request, IEs}.
+
+make_update_far(SEID, RuleId, Intf, PeerIP, PeerTEI) ->
+    IEs = #{cp_f_seid => SEID,
+	    update_far => [#{far_id => RuleId, apply_action => [forward],
+			     update_forwarding_parameters => #{
+			       destination_interface => Intf,
+			       outer_header_creation =>
+				   #f_teid{ipv4 = PeerIP,
+					   teid = PeerTEI}}}]
+	   },
+    {SEID, session_modification_request, IEs}.

@@ -10,102 +10,121 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/6]).
+-export([start_link/4, create_session/4]).
+-export([handle_msg/6]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3]).
 
 -include_lib("gtplib/include/gtp_packet.hrl").
+-include("include/gtp_u_edp.hrl").
 
 -define(SERVER, ?MODULE).
 -define('Tunnel Endpoint Identifier Data I',	{tunnel_endpoint_identifier_data_i, 0}).
+-define('GTP-U Peer Address',			{gsn_address, 0}).
 
--record(port, {name, pid, ip, local_tei, remote_tei}).
--record(state, {owner, grx_port, proxy_port}).
+-record(pdr, {name, pid, tei, far_id}).
+-record(far, {name, pid, ip, tei}).
+
+-record(state, {
+	  owner,
+	  name,
+	  seid,
+	  pdr = #{},
+	  far = #{}
+	 }).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
-start_link(Port, PeerIP, LocalTEI, RemoteTEI, Owner, Args) ->
-    gen_server:start_link(?MODULE, [Port, PeerIP, LocalTEI, RemoteTEI, Owner | Args], []).
+start_link(Name, Owner, SEID, SER) ->
+    gen_server:start_link(?MODULE, [Name, Owner, SEID, SER], []).
+
+create_session(Name, Owner, SEID, SER) ->
+    gtp_u_edp_handler_sup:create_session(Name, Owner, SEID, SER).
+
+handle_msg(Name, Socket, Req, IP, Port, #gtp{type = g_pdu, tei = TEI, seq_no = _SeqNo} = Msg)
+  when is_integer(TEI), TEI /= 0 ->
+    lager:debug("EDP: ~p", [{Name, TEI}]),
+    case gtp_u_edp:lookup({Name, TEI}) of
+	{Handler, PdrId} when is_pid(Handler) ->
+	    gen_server:cast(Handler, {handle_msg, PdrId, Req, Msg});
+	_ ->
+	    gtp_u_edp_port:send_error_indication(Socket, IP, TEI, [{udp_port, Port}]),
+	    gtp_u_edp_metrics:measure_request_error(Req, context_not_found),
+	    ok
+    end;
+handle_msg(Name, _Socket, Req, IP, Port,
+	   #gtp{type = error_indication,
+		ie = #{?'Tunnel Endpoint Identifier Data I' :=
+			   #tunnel_endpoint_identifier_data_i{tei = TEI}}} = Msg) ->
+    lager:notice("error_indication from ~p:~w, TEI: ~w", [IP, Port, TEI]),
+    lager:debug("EDP: ~p", [{Name, {remote, IP, TEI}}]),
+    case gtp_u_edp:lookup({Name, {remote, IP, TEI}}) of
+	{Handler, _} when is_pid(Handler) ->
+	    gen_server:cast(Handler, {handle_msg, IP, Port, Msg});
+	_ ->
+	    gtp_u_edp_metrics:measure_request_error(Req, context_not_found),
+	    ok
+   end;
+handle_msg(_Name, _Socket, _Req, IP, Port, #gtp{type = Type, tei = TEI, seq_no = _SeqNo}) ->
+    lager:notice("~p from ~p:~w, TEI: ~w, SeqNo: ~w", [Type, IP, Port, TEI, _SeqNo]),
+    ok.
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
-init([PortName, PeerIP, LocalTEI, RemoteTEI, Owner,
-      ProxyPortName, ProxyPeerIP, ProxyLocalTEI, ProxyRemoteTEI]) ->
-    try
-	GrxPort = init_port(PortName, PeerIP, LocalTEI, RemoteTEI),
-	ProxyPort = init_port(ProxyPortName, ProxyPeerIP, ProxyLocalTEI, ProxyRemoteTEI),
+init([Name, Owner, SEID, SER] = Args) ->
+    lager:info("fwd:init(~p)", [Args]),
 
-	State = #state{owner = Owner, grx_port = GrxPort, proxy_port = ProxyPort},
+    gtp_u_edp:register(Name, {seid, SEID}, SEID),
+    State0 = #state{owner = Owner, name = Name, seid = SEID},
+
+    try
+	State1 = lists:foldl(fun create_pdr/2, State0,
+			     maps:get(create_pdr, SER, [])),
+	State = lists:foldl(fun create_far/2, State1,
+			    maps:get(create_far, SER, [])),
 	{ok, State}
     catch
 	error:noproc ->
 	    {stop, {error, invalid_port}}
     end.
 
-handle_call({update_pdp_context, PeerIP, LocalTEI, RemoteTEI,
-	     {forward, [_ProxyPortName, ProxyPeerIP, ProxyLocalTEI, ProxyRemoteTEI]}},
-	    _From, #state{grx_port = GrxPort0,
-			  proxy_port = ProxyPort0} = State0) ->
+handle_call({OldSEID, session_modification_request, SMR},
+	    _From, #state{name = Name} = State0) ->
+    case maps:get(cp_f_seid, SMR, undefined) of
+	SEID when is_integer(SEID) andalso OldSEID /= SEID ->
+	    gtp_u_edp:unregister(Name, {seid, OldSEID}),
+	    gtp_u_edp:register(Name, {seid, SEID}, SEID);
+	_ ->
+	    ok
+    end,
 
-    try
-	GrxPort = update_port(GrxPort0, PeerIP, LocalTEI, RemoteTEI),
-	ProxyPort = update_port(ProxyPort0, ProxyPeerIP,
-				ProxyLocalTEI, ProxyRemoteTEI),
-	State = State0#state{grx_port = GrxPort, proxy_port = ProxyPort},
-	{reply, ok, State}
-    catch
-	error:noproc ->
-	    {stop, normal, {error, invalid_port}, State0};
-	throw:Reason ->
-	    {stop, normal, Reason, State0}
-    end;
+    State1 = lists:foldl(fun update_pdr/2, State0,
+			 maps:get(update_pdr, SMR, [])),
+    State = lists:foldl(fun update_far/2, State1,
+			maps:get(update_far, SMR, [])),
+    {reply, ok, State};
 
-handle_call({delete_pdp_context, _PeerIP, _LocalTEI, _RemoteTEI, _Args}, _From, State) ->
-    lager:debug("Forwarder: delete tunnel"),
+handle_call({SEID, session_deletion_request, _}, _From, #state{seid = SEID} = State) ->
+    lager:debug("Forwarder: delete session"),
     {stop, normal, ok, State};
 
 handle_call(_Request, _From, State) ->
     lager:warning("invalid CALL: ~p", [_Request]),
     {reply, error, State}.
 
-handle_cast({handle_msg, InPortName, Req, IP, Port,
-	     #gtp{type = error_indication,
-		  ie = #{?'Tunnel Endpoint Identifier Data I' :=
-			     #tunnel_endpoint_identifier_data_i{tei = TEI}}} = Msg},
-	    #state{grx_port = #port{name = InPortName, remote_tei = TEI} = GrxPort,
-		   proxy_port = ProxyPort} = State) ->
-    send_error_indication(Req, ProxyPort),
-    packet_in(GrxPort, Req, IP, Port, Msg),
+handle_cast({handle_msg, PdrId, Req, #gtp{type = g_pdu} = Msg}, State) ->
+    process_far(PdrId, get_far(PdrId, State), Req, Msg),
     {noreply, State};
 
-handle_cast({handle_msg, InPortName, Req, IP, Port,
-	     #gtp{type = error_indication,
-		  ie = #{?'Tunnel Endpoint Identifier Data I' :=
-			     #tunnel_endpoint_identifier_data_i{tei = TEI}}} = Msg},
-	    #state{grx_port = GrxPort,
-		   proxy_port = #port{name = InPortName, remote_tei = TEI} = ProxyPort} = State) ->
-    send_error_indication(Req, GrxPort),
-    packet_in(ProxyPort, Req, IP, Port, Msg),
+handle_cast({handle_msg, IP, _Port, #gtp{type = error_indication} = Msg}, State) ->
+    error_indication_report(IP, Msg, State),
     {noreply, State};
-
-handle_cast({handle_msg, InPortName, Req, _IP, _Port, #gtp{tei = TEI} = Msg},
-	    #state{grx_port = #port{name = InPortName, local_tei = TEI},
-		   proxy_port = ProxyPort} = State) ->
-    forward(ProxyPort, Req, Msg),
-    {noreply, State};
-
-handle_cast({handle_msg, InPortName, Req, _IP, _Port, #gtp{tei = TEI} = Msg},
-	    #state{grx_port = GrxPort,
-		   proxy_port = #port{name = InPortName, local_tei = TEI}} = State) ->
-    forward(GrxPort, Req, Msg),
-    {noreply, State};
-
 
 handle_cast(stop, State) ->
     lager:debug("Forwarder: STOP"),
@@ -128,12 +147,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-get_port_pid(Name) ->
+link_port(Name) ->
     RegName = gtp_u_edp_port:port_reg_name(Name),
-    whereis(RegName).
-
-init_port(Name, IP, LocalTEI, RemoteTEI) ->
-    case get_port_pid(Name) of
+    case whereis(RegName) of
 	Pid when is_pid(Pid) ->
 	    link(Pid);
 	_ ->
@@ -141,32 +157,101 @@ init_port(Name, IP, LocalTEI, RemoteTEI) ->
 	    %% not reached, silence bogus warning
 	    Pid = undefined
     end,
-    gtp_u_edp:register(Name, LocalTEI),
-    gtp_u_edp:register(Name, {remote, IP, RemoteTEI}),
+    Pid.
 
-    #port{name = Name, pid = Pid, ip = IP,
-	  local_tei  = LocalTEI,
-	  remote_tei = RemoteTEI}.
+create_pdr(#{pdr_id := PdrId,
+	     pdi := #{
+	       source_interface := InPortName,
+	       local_f_teid := #f_teid{teid = TEI}
+	      },
+	     outer_header_removal := true,
+	     far_id := FarId},
+	   #state{pdr = PDRs} = State) ->
+    PDR = #pdr{
+	     name = InPortName,
+	     pid = link_port(InPortName),
+	     tei = TEI,
+	     far_id = FarId
+	    },
+    gtp_u_edp:register(InPortName, TEI, PdrId),
+    State#state{pdr = PDRs#{PdrId => PDR}}.
 
-update_tei_registration(Name, Old, New)
-  when Old /= New ->
-    gtp_u_edp:register(Name, New),
-    gtp_u_edp:unregister(Name, Old);
-update_tei_registration(_Name, _Old, _New) ->
+update_pdr(#{pdr_id := PdrId,
+	     pdi := #{
+	       source_interface := InPortName,
+	       local_f_teid := #f_teid{teid = TEI}
+	      },
+	     outer_header_removal := true,
+	     far_id := FarId},
+	   #state{pdr = PDRs} = State) ->
+    #pdr{name = OldInPortName, tei = OldTEI} = maps:get(PdrId, PDRs),
+    gtp_u_edp:unregister(OldInPortName, OldTEI),
+    PDR = #pdr{
+	     name = InPortName,
+	     pid = link_port(InPortName),
+	     tei = TEI,
+	     far_id = FarId
+	    },
+    gtp_u_edp:register(InPortName, TEI, PdrId),
+    State#state{pdr = PDRs#{PdrId := PDR}}.
+
+create_far(#{far_id := FarId,
+	     apply_action := [forward],
+	     forwarding_parameters := #{
+	       destination_interface := OutPortName,
+	       outer_header_creation := #f_teid{ipv4 = IP, teid = TEI}
+	      }},
+	   #state{far = FARs} = State) ->
+    FAR = #far{
+	     name = OutPortName,
+	     pid = link_port(OutPortName),
+	     ip = IP,
+	     tei = TEI
+	    },
+    gtp_u_edp:register(OutPortName, {remote, IP, TEI}, undefined),
+    State#state{far = FARs#{FarId => FAR}}.
+
+update_far(#{far_id := FarId,
+	     apply_action := [forward],
+	     update_forwarding_parameters := #{
+	       destination_interface := OutPortName,
+	       outer_header_creation := #f_teid{ipv4 = IP, teid = TEI}
+	      }},
+	   #state{far = FARs} = State) ->
+    #far{name = OldOutPortName, ip = OldIP, tei = OldTEI} = maps:get(FarId, FARs),
+    gtp_u_edp:unregister(OldOutPortName, {remote, OldIP, OldTEI}),
+    FAR = #far{
+	     name = OutPortName,
+	     pid = link_port(OutPortName),
+	     ip = IP,
+	     tei = TEI
+	    },
+    gtp_u_edp:register(OutPortName, {remote, IP, TEI}, undefined),
+    State#state{far = FARs#{FarId := FAR}}.
+
+get_far(PdrId, #state{pdr = PDRs, far = FARs}) ->
+    case PDRs of
+	#{PdrId := #pdr{far_id = FarId}} ->
+	    maps:get(FarId, FARs, undefined);
+	_ ->
+	    undefined
+    end.
+
+process_far(_PdrId, #far{pid = Pid, ip = IP, tei = TEI}, Req, Msg) ->
+    Data = gtp_packet:encode(Msg#gtp{tei = TEI}),
+    gtp_u_edp_port:send(Pid, Req, IP, Data);
+process_far(_PdrId, _FAR, _Req, _Msg) ->
+    lager:debug("dropping packet with invalid FAR: ~p, ~p", [_Msg, _FAR]),
     ok.
 
-update_port(#port{name = Name} = Port, IP, LocalTEI, RemoteTEI) ->
-    update_tei_registration(Name, Port#port.local_tei, LocalTEI),
-    update_tei_registration(Name, {remote, Port#port.ip, Port#port.remote_tei},
-			          {remote, IP, RemoteTEI}),
-    Port#port{ip = IP, local_tei  = LocalTEI, remote_tei = RemoteTEI}.
-
-forward(#port{pid = Pid, remote_tei = TEI, ip = IP}, Req, Msg) ->
-    Data = gtp_packet:encode(Msg#gtp{tei = TEI}),
-    gtp_u_edp_port:send(Pid, Req, IP, Data).
-
-send_error_indication(Req, #port{pid = Pid, local_tei = TEI, ip = IP}) ->
-    gtp_u_edp_port:send_error_indication(Pid, Req, IP, TEI).
-
-packet_in(#port{pid = Pid}, Req, IP, Port, Msg) ->
-    gtp_u_edp_port:packet_in(Pid, Req, IP, Port, Msg).
+error_indication_report(IP, #gtp{ie = IEs},
+			#state{owner = Owner, seid = SEID}) ->
+    #tunnel_endpoint_identifier_data_i{tei = TEI} =
+	maps:get(?'Tunnel Endpoint Identifier Data I', IEs),
+    FTEID = #f_teid{ipv4 = IP, teid = TEI},
+    SRR = #{
+      report_type => [error_indication_report],
+      error_indication_report =>
+	  [#{remote_f_teid => FTEID}]
+     },
+    Owner ! {SEID, session_report_request, SRR}.

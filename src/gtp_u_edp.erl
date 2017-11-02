@@ -13,7 +13,7 @@
 
 %% API
 -export([start_link/0]).
--export([register/2, unregister/2, lookup/1, port_foreach/2]).
+-export([register/3, unregister/2, lookup/1, port_foreach/2]).
 -export([all/0]).
 
 %% gen_server callbacks
@@ -36,22 +36,22 @@
 start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-register(Port, TEI) ->
-    gen_server:call(?SERVER, {register, self(), {Port, TEI}}).
+register(Port, TEI, Args) ->
+    gen_server:call(?SERVER, {register, self(), {Port, TEI}, Args}).
 
 unregister(Port, TEI) ->
     gen_server:call(?SERVER, {unregister, {Port, TEI}}).
 
 lookup(Key) ->
     case ets:lookup(?SERVER, Key) of
-	[{Key, Pid, _}] ->
-	    Pid;
+	[{Key, Pid, _, Args}] ->
+	    {Pid, Args};
 	_ ->
 	    undefined
     end.
 
 port_foreach(Fun, Name) ->
-    Ms = ets:fun2ms(fun({{Port, _TEI}, Pid, _MRef}) when Port =:= Name -> Pid end),
+    Ms = ets:fun2ms(fun({{Port, _TEI}, Pid, _MRef, _Args}) when Port =:= Name -> Pid end),
     ets:safe_fixtable(?SERVER, true),
     port_foreach_do(Fun, ets:select(?SERVER, Ms, 1)),
     ets:safe_fixtable(?SERVER, false),
@@ -68,14 +68,14 @@ init([]) ->
     ets:new(?SERVER, [ordered_set, named_table, public, {keypos, 1}]),
     {ok, #state{}}.
 
-handle_call({register, Pid, Key}, _From, State) ->
+handle_call({register, Pid, Key, Args}, _From, State) ->
     MRef = erlang:monitor(process, Pid),
-    ets:insert_new(?SERVER, {Key, Pid, MRef}),
+    ets:insert_new(?SERVER, {Key, Pid, MRef, Args}),
     {reply, ok, State};
 
 handle_call({unregister, Key}, _From, State) ->
     L = ets:take(?SERVER, Key),
-    [erlang:demonitor(MRef) || {_Key, _Pid, MRef} <- L],
+    [erlang:demonitor(MRef) || {_Key, _Pid, MRef, _Args} <- L],
     {reply, ok, State};
 
 handle_call({bind, Port}, {Owner, _} = _From, State) ->
@@ -90,7 +90,7 @@ handle_cast(_Cast, State) ->
     {noreply, State}.
 
 handle_info({'DOWN', MonitorRef, process, _Pid, _Info}, State) ->
-    MS = ets:fun2ms(fun(Obj = {_Key,_P, MRef}) when MRef == MonitorRef -> Obj end),
+    MS = ets:fun2ms(fun(Obj = {_Key,_P, MRef, _A}) when MRef == MonitorRef -> Obj end),
     lists:foreach(ets:delete_object(?SERVER, _), ets:select(?SERVER, MS)),
     {noreply, State}.
 
