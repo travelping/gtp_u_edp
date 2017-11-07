@@ -11,6 +11,7 @@
 
 -export([init/1,
 	 measure_request/1,
+	 measure_end_marker/1,
 	 measure_request_error/2,
 	 measure_request_error/3]).
 
@@ -49,7 +50,12 @@ exo_reg_err(Name, Error) ->
 init(Name) ->
     lists:foreach(exo_reg_msg(Name, v1, _), ?GTP_U_MSGS),
     lists:foreach(exo_reg_err(Name, _), ?GTP_U_ERRS),
+    exometer:re_register([socket, 'gtp-u', Name, tx, v1, end_marker], counter, []),
     ok.
+
+measure_end_marker(Name) ->
+    exometer:update_or_create([socket, 'gtp-u', Name, tx, v1, end_marker],
+			      1, counter, []).
 
 measure_request(#request{name = Name, arrival_ts = ArrivalTS,
 				 msg = #gtp{version = Version, type = Type}}) ->

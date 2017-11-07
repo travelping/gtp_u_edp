@@ -390,6 +390,8 @@ session_modification_request(Config) ->
     {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, LeftIntf}),
     ok = gen_server:call(Pid, clear),
 
+    S = make_gtp_socket(Config),
+
     Request1 = make_forward_session(
 		 SEID,
 		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
@@ -435,8 +437,24 @@ session_modification_request(Config) ->
     validate_tunnel(LeftIntf, UpdLeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
     validate_tunnel(RightIntf, UpdRightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
-    Request7 = {SEID, session_deletion_request, #{}},
-    ?equal(ok, gen_server:call(Pid, Request7)),
+    %% make sure we did not get an End Marker
+    ?equal({error,timeout}, gen_udp:recv(S, 4096, ?TIMEOUT)),
+
+    Request7 = make_update_far(
+		 SEID, 1,
+		 LeftIntf, LeftPeerIP, LeftPeerTEI, true),
+
+    ?match(ok, gen_server:call(Pid, Request7)),
+    validate_tunnel(LeftIntf,  UpdLeftTEI, LeftPeerIP, LeftPeerTEI),
+    validate_tunnel(RightIntf, UpdRightTEI, UpdRightPeerIP, UpdRightPeerTEI),
+
+    %% make sure we DID get an End Marker
+    ?match(#gtp{type = end_marker, tei = UpdLeftPeerTEI}, recv_pdu(S, ?TIMEOUT)),
+
+    Request8 = {SEID, session_deletion_request, #{}},
+    ?equal(ok, gen_server:call(Pid, Request8)),
+
+    gen_udp:close(S),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
@@ -765,12 +783,20 @@ make_update_pdr(SEID, RuleId, Intf, TEI) ->
     {SEID, session_modification_request, IEs}.
 
 make_update_far(SEID, RuleId, Intf, PeerIP, PeerTEI) ->
-    IEs = #{cp_f_seid => SEID,
-	    update_far => [#{far_id => RuleId, apply_action => [forward],
-			     update_forwarding_parameters => #{
-			       destination_interface => Intf,
-			       outer_header_creation =>
-				   #f_teid{ipv4 = PeerIP,
-					   teid = PeerTEI}}}]
-	   },
+    make_update_far(SEID, RuleId, Intf, PeerIP, PeerTEI, false).
+
+make_update_far(SEID, RuleId, Intf, PeerIP, PeerTEI, SndEM) ->
+    FAR0 = #{far_id => RuleId,
+	     apply_action => [forward],
+	     update_forwarding_parameters => #{
+	       destination_interface => Intf,
+	       outer_header_creation =>
+		   #f_teid{ipv4 = PeerIP,
+			   teid = PeerTEI}}},
+    FAR = if SndEM =:= true ->
+		  FAR0#{sxsmreq_flags => [sndem]};
+	     true ->
+		  FAR0
+	  end,
+    IEs = #{cp_f_seid => SEID, update_far => [FAR]},
     {SEID, session_modification_request, IEs}.

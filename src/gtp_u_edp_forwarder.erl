@@ -216,7 +216,7 @@ update_far(#{far_id := FarId,
 	     update_forwarding_parameters := #{
 	       destination_interface := OutPortName,
 	       outer_header_creation := #f_teid{ipv4 = IP, teid = TEI}
-	      }},
+	      }} = UpdFAR,
 	   #state{far = FARs} = State) ->
     #far{name = OldOutPortName, ip = OldIP, tei = OldTEI} = maps:get(FarId, FARs),
     gtp_u_edp:unregister(OldOutPortName, {remote, OldIP, OldTEI}),
@@ -227,6 +227,15 @@ update_far(#{far_id := FarId,
 	     tei = TEI
 	    },
     gtp_u_edp:register(OutPortName, {remote, IP, TEI}, undefined),
+
+    SxSMReqFlags = maps:get(sxsmreq_flags, UpdFAR, []),
+    case proplists:get_bool(sndem, SxSMReqFlags) of
+	true ->
+	    send_end_marker(OldOutPortName, OldIP, OldTEI),
+	    ok;
+	_ ->
+	    ok
+    end,
     State#state{far = FARs#{FarId := FAR}}.
 
 get_far(PdrId, #state{pdr = PDRs, far = FARs}) ->
@@ -255,3 +264,12 @@ error_indication_report(IP, #gtp{ie = IEs},
 	  [#{remote_f_teid => FTEID}]
      },
     Owner ! {SEID, session_report_request, SRR}.
+
+send_end_marker(PortName, IP, TEI) ->
+    RegName = gtp_u_edp_port:port_reg_name(PortName),
+    case whereis(RegName) of
+	Pid when is_pid(Pid) ->
+	    gtp_u_edp_port:send_end_marker(Pid, IP, TEI);
+	_ ->
+	    ok
+    end.

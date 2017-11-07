@@ -25,7 +25,8 @@
 
 %% API
 -export([start_sockets/0, start_link/1, port_reg_name/1,
-	 send/4, send_error_indication/4, packet_in/5, bind/2,
+	 send_end_marker/3, send/4,
+	 send_error_indication/4, packet_in/5, bind/2,
 	 sendto/4]).
 
 %% gen_server callbacks
@@ -56,6 +57,9 @@ start_link({Name, SocketOpts0}) ->
 port_reg_name(Name) when is_atom(Name) ->
     BinName = iolist_to_binary(io_lib:format("port_~s", [Name])),
     binary_to_atom(BinName, latin1).
+
+send_end_marker(Pid, IP, TEI) ->
+    gen_server:cast(Pid, {send_end_marker, IP, TEI}).
 
 send(Pid, Req, IP, Data) ->
     gen_server:cast(Pid, {send, Req, IP, Data}).
@@ -200,6 +204,13 @@ handle_cast({send, Req, IP, Data}, #state{send = Send} = State) ->
 	    gtp_u_edp_metrics:measure_request_error(Req, send_failed),
 	    lager:debug("invalid send result: ~p", [Other])
     end,
+    {noreply, State};
+
+handle_cast({send_end_marker, IP, TEI}, #state{name = Name, send = Send} = State) ->
+    Msg = #gtp{version = v1, type = end_marker, tei = TEI, ie = []},
+    Data = gtp_packet:encode(Msg),
+    sendto(Send, IP, ?GTP1u_PORT, Data),
+    gtp_u_edp_metrics:measure_end_marker(Name),
     {noreply, State};
 
 handle_cast({send_error_indication, _Req, IP, TEI}, #state{send = Send} = State) ->
