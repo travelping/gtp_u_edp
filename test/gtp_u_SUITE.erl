@@ -102,6 +102,7 @@ all() ->
      session_deletion_request,
      session_modification_request,
      forward_data,
+     query_usage_report,
      error_indication
     ].
 
@@ -355,7 +356,7 @@ session_deletion_request(Config) ->
     validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
-    ?match(ok, gen_server:call(Pid, Request3)),
+    ?match({ok, _}, gen_server:call(Pid, Request3)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
@@ -413,7 +414,7 @@ session_modification_request(Config) ->
 		 SEID, 1,
 		 access, LeftIntf, UpdLeftPeerIP, UpdLeftPeerTEI),
 
-    ?match(ok, gen_server:call(Pid, Request3)),
+    ?match({ok, _}, gen_server:call(Pid, Request3)),
     validate_tunnel(LeftIntf, LeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
@@ -421,19 +422,19 @@ session_modification_request(Config) ->
 		 SEID, 2,
 		 core, RightIntf, UpdRightPeerIP, UpdRightPeerTEI),
 
-    ?match(ok, gen_server:call(Pid, Request4)),
+    ?match({ok, _}, gen_server:call(Pid, Request4)),
     validate_tunnel(LeftIntf,  LeftTEI,  UpdLeftPeerIP,  UpdLeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
     Request5 = make_update_pdr(SEID, 1, access, LeftIntf, UpdLeftTEI),
 
-    ?match(ok, gen_server:call(Pid, Request5)),
+    ?match({ok, _}, gen_server:call(Pid, Request5)),
     validate_tunnel(LeftIntf, UpdLeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
     Request6 = make_update_pdr(SEID, 2, core, RightIntf, UpdRightTEI),
 
-    ?match(ok, gen_server:call(Pid, Request6)),
+    ?match({ok, _}, gen_server:call(Pid, Request6)),
     validate_tunnel(LeftIntf, UpdLeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
     validate_tunnel(RightIntf, UpdRightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
@@ -444,7 +445,7 @@ session_modification_request(Config) ->
 		 SEID, 1,
 		 access, LeftIntf, LeftPeerIP, LeftPeerTEI, true),
 
-    ?match(ok, gen_server:call(Pid, Request7)),
+    ?match({ok, _}, gen_server:call(Pid, Request7)),
     validate_tunnel(LeftIntf,  UpdLeftTEI, LeftPeerIP, LeftPeerTEI),
     validate_tunnel(RightIntf, UpdRightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
@@ -452,7 +453,7 @@ session_modification_request(Config) ->
     ?match(#gtp{type = end_marker, tei = UpdLeftPeerTEI}, recv_pdu(S, ?TIMEOUT)),
 
     Request8 = {SEID, session_deletion_request, #{}},
-    ?equal(ok, gen_server:call(Pid, Request8)),
+    ?match({ok, _}, gen_server:call(Pid, Request8)),
 
     gen_udp:close(S),
 
@@ -511,7 +512,83 @@ forward_data(Config) ->
 	    ct:fail(timeout)
     end,
 
-    ?equal(ok, gen_server:call(Pid, Request2)),
+    ?match({ok, #{usage_report :=
+		      [#{volume :=
+			     #{dl		:= {8,1},
+			       ul		:= {8,1},
+			       total		:= {16,2},
+			       dropped_dl	:= {0,0},
+			       dropped_ul	:= {0,0}
+			      }}]}},
+	   gen_server:call(Pid, Request2)),
+
+    %% gtp_u_edp:all/0 bypasses the reg server
+    ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
+    ok = meck:wait(5, gtp_u_edp, handle_info, [{'DOWN', '_', '_', '_', normal}, '_'], ?TIMEOUT),
+    ?equal([], gtp_u_edp:all()),
+
+    meck_validate(Config),
+    ok.
+
+query_usage_report() ->
+    [{doc, "Test Session Modification with Query URR"}].
+query_usage_report(Config) ->
+    SEID = get_next_teid(),
+    LeftIntf = 'grx',
+    LeftTEI = get_next_teid(),
+    LeftPeerIP = ?CLIENT_IP,
+    LeftPeerTEI = get_next_teid(),
+    RightIntf = 'proxy-grx',
+    RightTEI = get_next_teid(),
+    RightPeerIP = ?FINAL_GSN,
+    RightPeerTEI = get_next_teid(),
+
+    {ok, Pid, ?TEST_GSN} = gen_server:call('gtp-u', {bind, LeftIntf}),
+    ok = gen_server:call(Pid, clear),
+
+    Request1 = make_forward_session(
+		 SEID,
+		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
+		 RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
+    Req2IEs = #{query_urr => [1, 2]},
+    Request2 = {SEID, session_modification_request, Req2IEs},
+    Request3 = {SEID, session_deletion_request, #{}},
+
+    ?match({ok, _}, gen_server:call(Pid, Request1)),
+    validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
+    validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
+
+    EchoFun =
+	fun(Socket) ->
+		Msg = recv_pdu(Socket, ?PROXY_GSN, ?TIMEOUT),
+		?match(#gtp{type = g_pdu, tei = RightPeerTEI}, Msg),
+		send_pdu(Socket, ?PROXY_GSN, Msg#gtp{tei = RightTEI}),
+		done
+	end,
+    {ok, EchoPid} = proc_lib:start_link(?MODULE, remote_server, [Config, self(), EchoFun]),
+
+    S = make_gtp_socket(Config),
+
+    Msg = #gtp{version = v1, type = g_pdu, tei = LeftTEI, ie = <<"TESTDATA">>},
+    ?match(#gtp{type = g_pdu, tei = LeftPeerTEI}, send_recv_pdu(S, Msg)),
+
+    receive
+	{EchoPid, done} -> ok
+    after ?TIMEOUT ->
+	    ct:fail(timeout)
+    end,
+
+    ?match({ok, #{usage_report :=
+		      [#{volume :=
+			     #{dl		:= {8,1},
+			       ul		:= {8,1},
+			       total		:= {16,2},
+			       dropped_dl	:= {0,0},
+			       dropped_ul	:= {0,0}
+			      }}]}},
+	   gen_server:call(Pid, Request2)),
+
+    ?match({ok, _}, gen_server:call(Pid, Request3)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
@@ -619,7 +696,7 @@ error_indication(Config) ->
 	    ok
     end,
 
-    ?equal(ok, gen_server:call(Pid, Request2)),
+    ?match({ok, _}, gen_server:call(Pid, Request2)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
@@ -754,12 +831,14 @@ make_forward_session(SEID,
 			     pdi => #{source_interface => access,
 				      network_instance => LeftIntf,
 				      local_f_teid => #f_teid{teid = LeftTEI}},
-			     outer_header_removal => true, far_id => 2},
+			     outer_header_removal => true, far_id => 2,
+			     urr_id => [1]},
 			   #{pdr_id => 2, precedence => 100,
 			     pdi => #{source_interface => core,
 				      network_instance => RightIntf,
 				      local_f_teid => #f_teid{teid = RightTEI}},
-			     outer_header_removal => true, far_id => 1}],
+			     outer_header_removal => true, far_id => 1,
+			     urr_id => [1]}],
 	    create_far => [#{far_id => 1, apply_action => [forward],
 			     forwarding_parameters => #{
 			       destination_interface => access,
@@ -773,7 +852,8 @@ make_forward_session(SEID,
 			       network_instance => RightIntf,
 			       outer_header_creation =>
 				   #f_teid{ipv4 = RightPeerIP,
-					   teid = RightPeerTEI}}}]
+					   teid = RightPeerTEI}}}],
+	    create_urr => [#{urr_id => 1, measurement_method => [volume]}]
 	   },
     {SEID, session_establishment_request, IEs}.
 
@@ -783,7 +863,8 @@ make_update_pdr(SEID, RuleId, IntfType, Instance, TEI) ->
 			     pdi => #{source_interface => IntfType,
 				      network_instance => Instance,
 				      local_f_teid => #f_teid{teid = TEI}},
-			     outer_header_removal => true, far_id => RuleId}]
+			     outer_header_removal => true, far_id => RuleId,
+			     urr_id => [1]}]
 	   },
     {SEID, session_modification_request, IEs}.
 

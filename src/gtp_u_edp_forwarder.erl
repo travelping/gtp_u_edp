@@ -29,7 +29,8 @@
 	  pid			:: 'undefined' | pid(),
 	  src_if		:: 'access' | 'core',
 	  tei,
-	  far_id
+	  far_id,
+	  urr_id = []
 	 }).
 -record(far, {
 	  name,
@@ -39,13 +40,21 @@
 	  ip,
 	  tei
 	 }).
+-record(counter, {
+	  dl = {0, 0},
+	  ul = {0, 0},
+	  total = {0, 0},
+	  dropped_dl = {0, 0},
+	  dropped_ul = {0, 0}
+	 }).
 
 -record(state, {
 	  owner,
 	  name,
 	  seid,
 	  pdr = #{},
-	  far = #{}
+	  far = #{},
+	  urr = #{}
 	 }).
 
 %%%===================================================================
@@ -99,8 +108,10 @@ init([Name, Owner, SEID, SER] = Args) ->
     try
 	State1 = lists:foldl(fun create_pdr/2, State0,
 			     maps:get(create_pdr, SER, [])),
-	State = lists:foldl(fun create_far/2, State1,
+	State2 = lists:foldl(fun create_far/2, State1,
 			    maps:get(create_far, SER, [])),
+	State = lists:foldl(fun create_urr/2, State2,
+			    maps:get(create_urr, SER, [])),
 	{ok, State}
     catch
 	error:noproc ->
@@ -119,20 +130,33 @@ handle_call({OldSEID, session_modification_request, SMR},
 
     State1 = lists:foldl(fun update_pdr/2, State0,
 			 maps:get(update_pdr, SMR, [])),
-    State = lists:foldl(fun update_far/2, State1,
+    State2 = lists:foldl(fun update_far/2, State1,
 			maps:get(update_far, SMR, [])),
-    {reply, ok, State};
+    State = lists:foldl(fun update_urr/2, State2,
+			maps:get(update_urr, SMR, [])),
+
+    Response = #{
+      usage_report => query_urr(maps:get(query_urr, SMR, []), State)
+     },
+    {reply, {ok, Response}, State};
 
 handle_call({SEID, session_deletion_request, _}, _From, #state{seid = SEID} = State) ->
     lager:debug("Forwarder: delete session"),
-    {stop, normal, ok, State};
+    Response = #{
+      usage_report => usage_report(State)
+     },
+    {stop, normal, {ok, Response}, State};
 
 handle_call(_Request, _From, State) ->
     lager:warning("invalid CALL: ~p", [_Request]),
     {reply, error, State}.
 
-handle_cast({handle_msg, PdrId, Req, #gtp{type = g_pdu} = Msg}, State) ->
-    process_far(PdrId, get_far(PdrId, State), Req, Msg),
+handle_cast({handle_msg, PdrId, Req, #gtp{type = g_pdu} = Msg}, State0) ->
+    PDR = get_pdr(PdrId, State0),
+    FAR = get_far(PDR, State0),
+    ForwardAction = get_far_action(FAR),
+    State = process_usage_reporting(PdrId, PDR, ForwardAction, Msg, State0),
+    process_far(PdrId, FAR, Req, Msg),
     {noreply, State};
 
 handle_cast({handle_msg, IP, _Port, #gtp{type = error_indication} = Msg}, State) ->
@@ -179,14 +203,15 @@ create_pdr(#{pdr_id := PdrId,
 	       local_f_teid := #f_teid{teid = TEI}
 	      },
 	     outer_header_removal := true,
-	     far_id := FarId},
+	     far_id := FarId} = CreatePDR,
 	   #state{pdr = PDRs} = State) ->
     PDR = #pdr{
 	     name = InPortName,
 	     pid = link_port(InPortName),
 	     src_if = SrcIf,
 	     tei = TEI,
-	     far_id = FarId
+	     far_id = FarId,
+	     urr_id = maps:get(urr_id, CreatePDR, [])
 	    },
     gtp_u_edp:register(InPortName, TEI, PdrId),
     State#state{pdr = PDRs#{PdrId => PDR}}.
@@ -198,7 +223,7 @@ update_pdr(#{pdr_id := PdrId,
 	       local_f_teid := #f_teid{teid = TEI}
 	      },
 	     outer_header_removal := true,
-	     far_id := FarId},
+	     far_id := FarId} = UpdPDR,
 	   #state{pdr = PDRs} = State) ->
     #pdr{name = OldInPortName, tei = OldTEI} = maps:get(PdrId, PDRs),
     gtp_u_edp:unregister(OldInPortName, OldTEI),
@@ -207,7 +232,8 @@ update_pdr(#{pdr_id := PdrId,
 	     pid = link_port(InPortName),
 	     src_if = SrcIf,
 	     tei = TEI,
-	     far_id = FarId
+	     far_id = FarId,
+	     urr_id = maps:get(urr_id, UpdPDR, [])
 	    },
     gtp_u_edp:register(InPortName, TEI, PdrId),
     State#state{pdr = PDRs#{PdrId := PDR}}.
@@ -261,13 +287,83 @@ update_far(#{far_id := FarId,
     end,
     State#state{far = FARs#{FarId := FAR}}.
 
-get_far(PdrId, #state{pdr = PDRs, far = FARs}) ->
-    case PDRs of
-	#{PdrId := #pdr{far_id = FarId}} ->
-	    maps:get(FarId, FARs, undefined);
-	_ ->
-	    undefined
-    end.
+create_urr(#{urr_id := UrrId} = URR, #state{urr = URRs} = State) ->
+    State#state{urr = URRs#{UrrId => URR}}.
+
+update_urr(#{urr_id := UrrId} = URR, #state{urr = URRs} = State) ->
+    %% TODO: keep old counter state ????
+    State#state{urr = URRs#{UrrId => URR}}.
+
+query_urr(UrrIds, #state{urr = URRs}) ->
+    maps:fold(fun usage_report/3, [], maps:with(UrrIds, URRs)).
+
+get_pdr(PdrId, #state{pdr = PDRs}) ->
+    maps:get(PdrId, PDRs, undefined).
+
+get_far(#pdr{far_id = FarId}, #state{far = FARs}) ->
+    maps:get(FarId, FARs, undefined);
+get_far(_, _) ->
+    undefined.
+
+get_urr(UrrId, #state{urr = URRs}) ->
+    maps:get(UrrId, URRs, undefined);
+get_urr(_, _) ->
+    undefined.
+
+update_urr(UrrId, URR, #state{urr = URRs} = State) ->
+    State#state{urr = URRs#{UrrId := URR}}.
+
+process_usage_reporting(PdrId, #pdr{src_if = SrcIf, urr_id = UrrIds},
+			ForwardAction, Msg, State) ->
+    lists:foldl(fun(UrrId, StateIn) ->
+			URR = process_urr(PdrId, SrcIf, ForwardAction,
+					  get_urr(UrrId, StateIn), Msg),
+			update_urr(UrrId, URR, StateIn)
+		end, State, UrrIds).
+
+-define(IS_SRC_UL_IntF(X), (X =:= 'access')).
+-define(IS_SRC_DL_IntF(X), (X =:= 'core')).
+
+update_counter(Add, {Bytes, Pkts}) ->
+    {Bytes + Add, Pkts + 1}.
+
+count_traffic(SrcIf, drop, Size,
+	      #counter{dropped_dl = Cnt} = Counter)
+  when ?IS_SRC_DL_IntF(SrcIf) ->
+    Counter#counter{dropped_dl = update_counter(Size, Cnt)};
+count_traffic(SrcIf, drop, Size,
+	      #counter{dropped_ul = Cnt} = Counter)
+  when ?IS_SRC_UL_IntF(SrcIf) ->
+    Counter#counter{dropped_ul = update_counter(Size, Cnt)};
+count_traffic(SrcIf, forward, Size,
+	      #counter{dl = Cnt, total = Total} = Counter)
+  when ?IS_SRC_DL_IntF(SrcIf) ->
+    Counter#counter{dl = update_counter(Size, Cnt),
+		    total = update_counter(Size, Total)};
+count_traffic(SrcIf, forward, Size,
+	      #counter{ul = Cnt, total = Total} = Counter)
+  when ?IS_SRC_UL_IntF(SrcIf) ->
+    Counter#counter{ul = update_counter(Size, Cnt),
+		    total = update_counter(Size, Total)};
+count_traffic(_SrcIf, _ForwardAction, _Size, Counter) ->
+    Counter.
+
+count_urr(SrcIf, ForwardAction, URR, #gtp{ie = Data}) ->
+    Counter0 = maps:get(counter, URR, #counter{}),
+    Counter = count_traffic(SrcIf, ForwardAction, size(Data), Counter0),
+    URR#{counter => Counter}.
+
+process_urr(_PdrId, SrcIf, ForwardAction, URR0, Msg)
+  when is_map(URR0) ->
+    URR = count_urr(SrcIf, ForwardAction, URR0, Msg),
+    URR;
+process_urr(_PdrId, _SrcIf, _ForwardAction, URR, _Msg) ->
+    URR.
+
+get_far_action(#far{action = Action}) ->
+    Action;
+get_far_action(_) ->
+    drop.
 
 process_far(_PdrId, #far{pid = Pid, action = forward, ip = IP, tei = TEI}, Req, Msg) ->
     Data = gtp_packet:encode(Msg#gtp{tei = TEI}),
@@ -287,6 +383,26 @@ error_indication_report(IP, #gtp{ie = IEs},
 	  [#{remote_f_teid => FTEID}]
      },
     Owner ! {SEID, session_report_request, SRR}.
+
+urr_volume_report(_URR, #counter{
+			   dl = DL, ul = UL, total = Total,
+			   dropped_dl = DropDL, dropped_ul = DropUL}) ->
+    #{dl => DL, ul => UL, total => Total,
+      dropped_dl => DropDL, dropped_ul => DropUL}.
+
+usage_report(UrrId, #{
+	       measurement_method := [volume],
+	       counter := Counter} = URR, Reports) ->
+    UR = #{
+      urr_id => UrrId,
+      volume => urr_volume_report(URR, Counter)
+     },
+    [UR | Reports];
+usage_report(_, _, Reports) ->
+    Reports.
+
+usage_report(#state{urr = URRs}) ->
+    maps:fold(fun usage_report/3, [], URRs).
 
 send_end_marker(PortName, IP, TEI) ->
     RegName = gtp_u_edp_port:port_reg_name(PortName),
