@@ -403,7 +403,7 @@ session_modification_request(Config) ->
 
     Request2 = make_update_far(
 		 InvalidSEID, 1,
-		 LeftIntf,  UpdLeftPeerIP, UpdLeftPeerTEI),
+		 access, LeftIntf, UpdLeftPeerIP, UpdLeftPeerTEI),
 
     ?match({error,not_found}, gen_server:call(Pid, Request2)),
     validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
@@ -411,7 +411,7 @@ session_modification_request(Config) ->
 
     Request3 = make_update_far(
 		 SEID, 1,
-		 LeftIntf,  UpdLeftPeerIP, UpdLeftPeerTEI),
+		 access, LeftIntf, UpdLeftPeerIP, UpdLeftPeerTEI),
 
     ?match(ok, gen_server:call(Pid, Request3)),
     validate_tunnel(LeftIntf, LeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
@@ -419,19 +419,19 @@ session_modification_request(Config) ->
 
     Request4 = make_update_far(
 		 SEID, 2,
-		 RightIntf, UpdRightPeerIP, UpdRightPeerTEI),
+		 core, RightIntf, UpdRightPeerIP, UpdRightPeerTEI),
 
     ?match(ok, gen_server:call(Pid, Request4)),
     validate_tunnel(LeftIntf,  LeftTEI,  UpdLeftPeerIP,  UpdLeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
-    Request5 = make_update_pdr(SEID, 1, LeftIntf, UpdLeftTEI),
+    Request5 = make_update_pdr(SEID, 1, access, LeftIntf, UpdLeftTEI),
 
     ?match(ok, gen_server:call(Pid, Request5)),
     validate_tunnel(LeftIntf, UpdLeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
-    Request6 = make_update_pdr(SEID, 2, RightIntf, UpdRightTEI),
+    Request6 = make_update_pdr(SEID, 2, core, RightIntf, UpdRightTEI),
 
     ?match(ok, gen_server:call(Pid, Request6)),
     validate_tunnel(LeftIntf, UpdLeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
@@ -442,7 +442,7 @@ session_modification_request(Config) ->
 
     Request7 = make_update_far(
 		 SEID, 1,
-		 LeftIntf, LeftPeerIP, LeftPeerTEI, true),
+		 access, LeftIntf, LeftPeerIP, LeftPeerTEI, true),
 
     ?match(ok, gen_server:call(Pid, Request7)),
     validate_tunnel(LeftIntf,  UpdLeftTEI, LeftPeerIP, LeftPeerTEI),
@@ -751,45 +751,51 @@ make_forward_session(SEID,
 		     RightIntf, RightTEI, RightPeerIP, RightPeerTEI) ->
     IEs = #{cp_f_seid => SEID,
 	    create_pdr => [#{pdr_id => 1, precedence => 100,
-			     pdi => #{source_interface => LeftIntf,
+			     pdi => #{source_interface => access,
+				      network_instance => LeftIntf,
 				      local_f_teid => #f_teid{teid = LeftTEI}},
 			     outer_header_removal => true, far_id => 2},
 			   #{pdr_id => 2, precedence => 100,
-			     pdi => #{source_interface => RightIntf,
+			     pdi => #{source_interface => core,
+				      network_instance => RightIntf,
 				      local_f_teid => #f_teid{teid = RightTEI}},
 			     outer_header_removal => true, far_id => 1}],
 	    create_far => [#{far_id => 1, apply_action => [forward],
 			     forwarding_parameters => #{
-			       destination_interface => LeftIntf,
+			       destination_interface => access,
+			       network_instance => LeftIntf,
 			       outer_header_creation =>
 				   #f_teid{ipv4 = LeftPeerIP,
 					   teid = LeftPeerTEI}}},
 			   #{far_id => 2, apply_action => [forward],
 			     forwarding_parameters => #{
-			       destination_interface => RightIntf,
+			       destination_interface => core,
+			       network_instance => RightIntf,
 			       outer_header_creation =>
 				   #f_teid{ipv4 = RightPeerIP,
 					   teid = RightPeerTEI}}}]
 	   },
     {SEID, session_establishment_request, IEs}.
 
-make_update_pdr(SEID, RuleId, Intf, TEI) ->
+make_update_pdr(SEID, RuleId, IntfType, Instance, TEI) ->
     IEs = #{cp_f_seid => SEID,
 	    update_pdr => [#{pdr_id => RuleId, precedence => 100,
-			     pdi => #{source_interface => Intf,
+			     pdi => #{source_interface => IntfType,
+				      network_instance => Instance,
 				      local_f_teid => #f_teid{teid = TEI}},
 			     outer_header_removal => true, far_id => RuleId}]
 	   },
     {SEID, session_modification_request, IEs}.
 
-make_update_far(SEID, RuleId, Intf, PeerIP, PeerTEI) ->
-    make_update_far(SEID, RuleId, Intf, PeerIP, PeerTEI, false).
+make_update_far(SEID, RuleId, IntfType, Instance, PeerIP, PeerTEI) ->
+    make_update_far(SEID, RuleId, IntfType, Instance, PeerIP, PeerTEI, false).
 
-make_update_far(SEID, RuleId, Intf, PeerIP, PeerTEI, SndEM) ->
+make_update_far(SEID, RuleId, IntfType, Instance, PeerIP, PeerTEI, SndEM) ->
     FAR0 = #{far_id => RuleId,
 	     apply_action => [forward],
 	     update_forwarding_parameters => #{
-	       destination_interface => Intf,
+	       destination_interface => IntfType,
+	       network_instance => Instance,
 	       outer_header_creation =>
 		   #f_teid{ipv4 = PeerIP,
 			   teid = PeerTEI}}},

@@ -24,8 +24,21 @@
 -define('Tunnel Endpoint Identifier Data I',	{tunnel_endpoint_identifier_data_i, 0}).
 -define('GTP-U Peer Address',			{gsn_address, 0}).
 
--record(pdr, {name, pid, tei, far_id}).
--record(far, {name, pid, ip, tei}).
+-record(pdr, {
+	  name,
+	  pid			:: 'undefined' | pid(),
+	  src_if		:: 'access' | 'core',
+	  tei,
+	  far_id
+	 }).
+-record(far, {
+	  name,
+	  pid			:: 'undefined' | pid(),
+	  dst_if		:: 'access' | 'core',
+	  action = drop		:: 'forward' | 'buffer' | 'drop',
+	  ip,
+	  tei
+	 }).
 
 -record(state, {
 	  owner,
@@ -161,7 +174,8 @@ link_port(Name) ->
 
 create_pdr(#{pdr_id := PdrId,
 	     pdi := #{
-	       source_interface := InPortName,
+	       source_interface := SrcIf,
+	       network_instance := InPortName,
 	       local_f_teid := #f_teid{teid = TEI}
 	      },
 	     outer_header_removal := true,
@@ -170,6 +184,7 @@ create_pdr(#{pdr_id := PdrId,
     PDR = #pdr{
 	     name = InPortName,
 	     pid = link_port(InPortName),
+	     src_if = SrcIf,
 	     tei = TEI,
 	     far_id = FarId
 	    },
@@ -178,7 +193,8 @@ create_pdr(#{pdr_id := PdrId,
 
 update_pdr(#{pdr_id := PdrId,
 	     pdi := #{
-	       source_interface := InPortName,
+	       source_interface := SrcIf,
+	       network_instance := InPortName,
 	       local_f_teid := #f_teid{teid = TEI}
 	      },
 	     outer_header_removal := true,
@@ -189,6 +205,7 @@ update_pdr(#{pdr_id := PdrId,
     PDR = #pdr{
 	     name = InPortName,
 	     pid = link_port(InPortName),
+	     src_if = SrcIf,
 	     tei = TEI,
 	     far_id = FarId
 	    },
@@ -198,13 +215,16 @@ update_pdr(#{pdr_id := PdrId,
 create_far(#{far_id := FarId,
 	     apply_action := [forward],
 	     forwarding_parameters := #{
-	       destination_interface := OutPortName,
+	       destination_interface := DstIf,
+	       network_instance := OutPortName,
 	       outer_header_creation := #f_teid{ipv4 = IP, teid = TEI}
 	      }},
 	   #state{far = FARs} = State) ->
     FAR = #far{
 	     name = OutPortName,
 	     pid = link_port(OutPortName),
+	     dst_if = DstIf,
+	     action = forward,
 	     ip = IP,
 	     tei = TEI
 	    },
@@ -214,7 +234,8 @@ create_far(#{far_id := FarId,
 update_far(#{far_id := FarId,
 	     apply_action := [forward],
 	     update_forwarding_parameters := #{
-	       destination_interface := OutPortName,
+	       destination_interface := DstIf,
+	       network_instance := OutPortName,
 	       outer_header_creation := #f_teid{ipv4 = IP, teid = TEI}
 	      }} = UpdFAR,
 	   #state{far = FARs} = State) ->
@@ -223,6 +244,8 @@ update_far(#{far_id := FarId,
     FAR = #far{
 	     name = OutPortName,
 	     pid = link_port(OutPortName),
+	     dst_if = DstIf,
+	     action = forward,
 	     ip = IP,
 	     tei = TEI
 	    },
@@ -246,7 +269,7 @@ get_far(PdrId, #state{pdr = PDRs, far = FARs}) ->
 	    undefined
     end.
 
-process_far(_PdrId, #far{pid = Pid, ip = IP, tei = TEI}, Req, Msg) ->
+process_far(_PdrId, #far{pid = Pid, action = forward, ip = IP, tei = TEI}, Req, Msg) ->
     Data = gtp_packet:encode(Msg#gtp{tei = TEI}),
     gtp_u_edp_port:send(Pid, Req, IP, Data);
 process_far(_PdrId, _FAR, _Req, _Msg) ->
