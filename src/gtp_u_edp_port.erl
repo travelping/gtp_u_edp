@@ -172,18 +172,11 @@ handle_call({SEID, session_establishment_request, SER} = _Request,
 
     {reply, Reply, State};
 
-handle_call({SEID, SessionRequest, _} = Request,
-	    _From, #state{name = Name} = State)
+handle_call({SEID, SessionRequest, _} = Request, _From, State)
   when SessionRequest =:= session_modification_request;
        SessionRequest =:= session_deletion_request ->
     lager:info("EDP Port Call ~p: SEID: ~p, Req: ~p", [_From, SEID, SessionRequest]),
-    Reply =
-	case gtp_u_edp:lookup({Name, {seid, SEID}}) of
-	    {Pid, _} when is_pid(Pid) ->
-		gen_server:call(Pid, Request);
-	    _ ->
-		{error, not_found}
-	end,
+    Reply = call_forwarder({seid, SEID}, Request, State),
     {reply, Reply, State};
 
 handle_call(clear, _From, #state{name = Name} = State) ->
@@ -404,3 +397,11 @@ clear_port(Pid) ->
 
 make_request(Name, Msg, ArrivalTS) ->
     #request{name = Name, arrival_ts = ArrivalTS, msg = Msg}.
+
+call_forwarder(Key, Request, #state{name = Name}) ->
+    case gtp_u_edp:lookup({Name, Key}) of
+	{Pid, _} when is_pid(Pid) ->
+	    gen_server:call(Pid, Request);
+	_ ->
+	    {error, not_found}
+    end.
