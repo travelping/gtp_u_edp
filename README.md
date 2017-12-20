@@ -6,16 +6,15 @@ gtp_u_edp - GTPv1-U Erlang Datapath
 
 This is a GTPv1-U (3GPP TS 29.281) datapath element for the erGW GGSN/PGW project implemented in pure Erlang.
 
-2016-07-20 - this is code very much WiP !!!!
+STATUS - 2017-12-20
+-------------------
+
+This code is stable and in production use for S-GW like setups.
 
 BUILDING
 --------
 
-Using tetrapak:
-
-    # tetrapak build check
-
-Using rebar:
+Using rebar3:
 
     # rebar3 compile
 
@@ -24,4 +23,4 @@ Using rebar:
 [travis badge]: https://img.shields.io/travis/travelping/gtp_u_edp/master.svg?style=flat-square
 [coveralls]: https://coveralls.io/github/travelping/gtp_u_edp
 [coveralls badge]: https://img.shields.io/coveralls/travelping/gtp_u_edp/master.svg?style=flat-square
-[erlang version badge]: https://img.shields.io/badge/erlang-R19.1%20to%2020.0-blue.svg?style=flat-square
+[erlang version badge]: https://img.shields.io/badge/erlang-R20.0%20to%2020.1-blue.svg?style=flat-square
