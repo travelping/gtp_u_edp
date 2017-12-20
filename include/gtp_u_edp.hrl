@@ -15,9 +15,3 @@
 	  arrival_ts,
 	  msg
 	 }).
-
--record(f_teid, {
-	  ipv4			:: inet:ip4_address(),
-	  ipv6			:: inet:ip6_address(),
-	  teid			:: 0..16#ffffffff
-	 }).

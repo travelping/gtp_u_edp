@@ -21,6 +21,7 @@
 
 -include_lib("gen_socket/include/gen_socket.hrl").
 -include_lib("gtplib/include/gtp_packet.hrl").
+-include_lib("pfcplib/include/pfcp_packet.hrl").
 -include("include/gtp_u_edp.hrl").
 
 %% API
@@ -54,6 +55,9 @@ start_link({Name, SocketOpts0}) ->
     SocketOpts = validate_options(SocketOpts0),
     gen_server:start_link({local, RegName}, ?MODULE, [Name, SocketOpts], []).
 
+port_reg_name(Name) when is_list(Name) ->
+    BinName = iolist_to_binary(io_lib:format("port_~s", [lists:join($., Name)])),
+    binary_to_atom(BinName, latin1);
 port_reg_name(Name) when is_atom(Name) ->
     BinName = iolist_to_binary(io_lib:format("port_~s", [Name])),
     binary_to_atom(BinName, latin1).
@@ -164,15 +168,15 @@ handle_call({bind, Owner}, _From, #state{ip = IP} = State) ->
     Reply = {ok, self(), IP},
     {reply, Reply, State#state{owner = Owner}};
 
-handle_call({SEID, session_establishment_request, SER} = _Request,
-	     {Owner, _Tag} = _From, #state{name = Name} = State) ->
+handle_call(#pfcp{version = v1, type = session_establishment_request, seid = 0} = Request,
+	    {Owner, _Tag} = _From, #state{name = Name} = State) ->
 
-    lager:info("EDP Port Session Establishment Request ~p: ~p", [_From, _Request]),
-    Reply = gtp_u_edp_forwarder:create_session(Name, Owner, SEID, SER),
+    lager:info("EDP Port Session Establishment Request ~p: ~p", [_From, Request]),
+    Reply = gtp_u_edp_forwarder:create_session(Name, Owner, Request),
 
     {reply, Reply, State};
 
-handle_call({SEID, SessionRequest, _} = Request, _From, State)
+handle_call(#pfcp{version = v1, type = SessionRequest, seid = SEID} = Request, _From, State)
   when SessionRequest =:= session_modification_request;
        SessionRequest =:= session_deletion_request ->
     lager:info("EDP Port Call ~p: SEID: ~p, Req: ~p", [_From, SEID, SessionRequest]),

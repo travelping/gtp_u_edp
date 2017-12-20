@@ -11,6 +11,7 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("gtplib/include/gtp_packet.hrl").
+-include_lib("pfcplib/include/pfcp_packet.hrl").
 -include("../include/gtp_u_edp.hrl").
 
 -define(TIMEOUT, 2000).
@@ -345,8 +346,8 @@ session_deletion_request(Config) ->
 		 SEID,
 		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
 		 RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
-    Request2 = {InvalidSEID, session_deletion_request, #{}},
-    Request3 = {SEID, session_deletion_request, #{}},
+    Request2 = make_pfcp(session_deletion_request, InvalidSEID, #{}),
+    Request3 = make_pfcp(session_deletion_request, SEID, #{}),
 
     ?match({ok, _}, gen_server:call(Pid, Request1)),
     validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
@@ -356,7 +357,8 @@ session_deletion_request(Config) ->
     validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
-    ?match({ok, _}, gen_server:call(Pid, Request3)),
+    ?match(#pfcp{ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'}}},
+	   gen_server:call(Pid, Request3)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
@@ -404,7 +406,7 @@ session_modification_request(Config) ->
 
     Request2 = make_update_far(
 		 InvalidSEID, 1,
-		 access, LeftIntf, UpdLeftPeerIP, UpdLeftPeerTEI),
+		 'Access', LeftIntf, UpdLeftPeerIP, UpdLeftPeerTEI),
 
     ?match({error,not_found}, gen_server:call(Pid, Request2)),
     validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
@@ -412,29 +414,33 @@ session_modification_request(Config) ->
 
     Request3 = make_update_far(
 		 SEID, 1,
-		 access, LeftIntf, UpdLeftPeerIP, UpdLeftPeerTEI),
+		 'Access', LeftIntf, UpdLeftPeerIP, UpdLeftPeerTEI),
 
-    ?match({ok, _}, gen_server:call(Pid, Request3)),
+    ?match(#pfcp{ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'}}},
+	   gen_server:call(Pid, Request3)),
     validate_tunnel(LeftIntf, LeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
 
     Request4 = make_update_far(
 		 SEID, 2,
-		 core, RightIntf, UpdRightPeerIP, UpdRightPeerTEI),
+		 'Core', RightIntf, UpdRightPeerIP, UpdRightPeerTEI),
 
-    ?match({ok, _}, gen_server:call(Pid, Request4)),
+    ?match(#pfcp{ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'}}},
+	   gen_server:call(Pid, Request4)),
     validate_tunnel(LeftIntf,  LeftTEI,  UpdLeftPeerIP,  UpdLeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
-    Request5 = make_update_pdr(SEID, 1, access, LeftIntf, UpdLeftTEI),
+    Request5 = make_update_pdr(SEID, 1, 'Access', LeftIntf, UpdLeftTEI),
 
-    ?match({ok, _}, gen_server:call(Pid, Request5)),
+    ?match(#pfcp{ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'}}},
+	   gen_server:call(Pid, Request5)),
     validate_tunnel(LeftIntf, UpdLeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
     validate_tunnel(RightIntf, RightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
-    Request6 = make_update_pdr(SEID, 2, core, RightIntf, UpdRightTEI),
+    Request6 = make_update_pdr(SEID, 2, 'Core', RightIntf, UpdRightTEI),
 
-    ?match({ok, _}, gen_server:call(Pid, Request6)),
+    ?match(#pfcp{ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'}}},
+	   gen_server:call(Pid, Request6)),
     validate_tunnel(LeftIntf, UpdLeftTEI, UpdLeftPeerIP, UpdLeftPeerTEI),
     validate_tunnel(RightIntf, UpdRightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
@@ -443,17 +449,19 @@ session_modification_request(Config) ->
 
     Request7 = make_update_far(
 		 SEID, 1,
-		 access, LeftIntf, LeftPeerIP, LeftPeerTEI, true),
+		 'Access', LeftIntf, LeftPeerIP, LeftPeerTEI, true),
 
-    ?match({ok, _}, gen_server:call(Pid, Request7)),
+    ?match(#pfcp{ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'}}},
+	   gen_server:call(Pid, Request7)),
     validate_tunnel(LeftIntf,  UpdLeftTEI, LeftPeerIP, LeftPeerTEI),
     validate_tunnel(RightIntf, UpdRightTEI, UpdRightPeerIP, UpdRightPeerTEI),
 
     %% make sure we DID get an End Marker
     ?match(#gtp{type = end_marker, tei = UpdLeftPeerTEI}, recv_pdu(S, ?TIMEOUT)),
 
-    Request8 = {SEID, session_deletion_request, #{}},
-    ?match({ok, _}, gen_server:call(Pid, Request8)),
+    Request8 = make_pfcp(session_deletion_request, SEID, #{}),
+    ?match(#pfcp{ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'}}},
+	   gen_server:call(Pid, Request8)),
 
     gen_udp:close(S),
 
@@ -486,7 +494,7 @@ forward_data(Config) ->
 		 SEID,
 		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
 		 RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
-    Request2 = {SEID, session_deletion_request, #{}},
+    Request2 = make_pfcp(session_deletion_request, SEID, #{}),
 
     ?match({ok, _}, gen_server:call(Pid, Request1)),
     validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
@@ -512,14 +520,23 @@ forward_data(Config) ->
 	    ct:fail(timeout)
     end,
 
-    ?match({ok, #{usage_report :=
-		      [#{volume :=
-			     #{dl		:= {8,1},
-			       ul		:= {8,1},
-			       total		:= {16,2},
-			       dropped_dl	:= {0,0},
-			       dropped_ul	:= {0,0}
-			      }}]}},
+    ?match(#pfcp{type = session_deletion_response,
+		 ie = #{
+		   pfcp_cause := #pfcp_cause{cause = 'Request accepted'},
+		   usage_report_sdr :=
+		       #usage_report_sdr{
+			  group =
+			      #{urr_id := #urr_id{id = 1},
+				volume_measurement :=
+				    #volume_measurement{
+				       total = 16, uplink = 8, downlink = 8},
+				tp_packet_measurement :=
+				    #tp_packet_measurement{
+				       total = 2, uplink = 1, downlink = 1}
+			       }
+			 }
+		  }
+		},
 	   gen_server:call(Pid, Request2)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
@@ -550,9 +567,10 @@ query_usage_report(Config) ->
 		 SEID,
 		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
 		 RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
-    Req2IEs = #{query_urr => [1, 2]},
-    Request2 = {SEID, session_modification_request, Req2IEs},
-    Request3 = {SEID, session_deletion_request, #{}},
+    Req2IEs = [#query_urr{group = [#urr_id{id = 1}]},
+	       #query_urr{group = [#urr_id{id = 2}]}],
+    Request2 = make_pfcp(session_modification_request, SEID, Req2IEs),
+    Request3 = make_pfcp(session_deletion_request, SEID, #{}),
 
     ?match({ok, _}, gen_server:call(Pid, Request1)),
     validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
@@ -578,17 +596,27 @@ query_usage_report(Config) ->
 	    ct:fail(timeout)
     end,
 
-    ?match({ok, #{usage_report :=
-		      [#{volume :=
-			     #{dl		:= {8,1},
-			       ul		:= {8,1},
-			       total		:= {16,2},
-			       dropped_dl	:= {0,0},
-			       dropped_ul	:= {0,0}
-			      }}]}},
+    ?match(#pfcp{type = session_modification_response,
+		 ie = #{
+		   pfcp_cause := #pfcp_cause{cause = 'Request accepted'},
+		   usage_report_smr :=
+		       #usage_report_smr{
+			  group =
+			      #{urr_id := #urr_id{id = 1},
+				volume_measurement :=
+				    #volume_measurement{
+				       total = 16, uplink = 8, downlink = 8},
+				tp_packet_measurement :=
+				    #tp_packet_measurement{
+				       total = 2, uplink = 1, downlink = 1}
+			       }
+			 }
+		  }
+		},
 	   gen_server:call(Pid, Request2)),
 
-    ?match({ok, _}, gen_server:call(Pid, Request3)),
+    ?match(#pfcp{ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'}}},
+	   gen_server:call(Pid, Request3)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
@@ -619,7 +647,7 @@ error_indication(Config) ->
 		 SEID,
 		 LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
 		 RightIntf, RightTEI, RightPeerIP, RightPeerTEI),
-    Request2 = {SEID, session_deletion_request, #{}},
+    Request2 = make_pfcp(session_deletion_request, SEID, #{}),
 
     ?match({ok, _}, gen_server:call(Pid, Request1)),
     validate_tunnel(LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI),
@@ -639,13 +667,17 @@ error_indication(Config) ->
 		seq_no = undefined, ie = Msg2IE},
     send_pdu(S, Msg2),
 
+    ClientIP = ip2bin(?CLIENT_IP),
     receive
-	{SEID, session_report_request, IEs2} ->
-	    ?match(#{report_type := [error_indication_report],
+	#pfcp{version = v1, type = session_report_request, seid = SEID, ie = IEs2} ->
+	    ?match(#{report_type := #report_type{erir = 1},
 		     error_indication_report :=
-			 [#{remote_f_teid :=
-				#f_teid{ipv4 = ?CLIENT_IP, teid = LeftPeerTEI}
-			   }]
+			 #error_indication_report{
+			    group = #{
+			      f_teid :=
+				  #f_teid{ipv4 = ClientIP, teid = LeftPeerTEI}
+			     }
+			   }
 		    }, IEs2)
     after ?TIMEOUT ->
 	    ct:fail(timeout)
@@ -673,13 +705,17 @@ error_indication(Config) ->
 	    ct:fail(timeout)
     end,
 
+    FinalGSN = ip2bin(?FINAL_GSN),
     receive
-	{SEID, session_report_request, IEs3} ->
-	    ?match(#{report_type := [error_indication_report],
+	#pfcp{version = v1, type = session_report_request, seid = SEID, ie = IEs3} ->
+	    ?match(#{report_type := #report_type{erir = 1},
 		     error_indication_report :=
-			 [#{remote_f_teid :=
-				#f_teid{ipv4 = ?FINAL_GSN, teid = RightPeerTEI}
-			   }]
+			 #error_indication_report{
+			    group = #{
+			      f_teid :=
+				  #f_teid{ipv4 = FinalGSN, teid = RightPeerTEI}
+			     }
+			   }
 		    }, IEs3)
     after ?TIMEOUT ->
 	    ct:fail(timeout)
@@ -696,7 +732,8 @@ error_indication(Config) ->
 	    ok
     end,
 
-    ?match({ok, _}, gen_server:call(Pid, Request2)),
+    ?match(#pfcp{ie = #{pfcp_cause := #pfcp_cause{cause = 'Request accepted'}}},
+	   gen_server:call(Pid, Request2)),
 
     %% gtp_u_edp:all/0 bypasses the reg server
     ok = meck:wait(gtp_u_edp_forwarder, terminate, '_', ?TIMEOUT),
@@ -823,67 +860,140 @@ validate_tunnel(Name, LocalTEI, RemoteIP, RemoteTEI) ->
     ?match({Pid, _} when is_pid(Pid), gtp_u_edp:lookup({Name, {remote, RemoteIP, RemoteTEI}})),
     ok.
 
+ip2bin(IP) when is_binary(IP) ->
+    IP;
+ip2bin({A, B, C, D}) ->
+    <<A, B, C, D>>;
+ip2bin({A, B, C, D, E, F, G, H}) ->
+    <<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>.
+
+network_instance(Name) when is_atom(Name) ->
+    #network_instance{instance = [atom_to_binary(Name, latin1)]}.
+
+make_pfcp(Type, SEID, IEs) ->
+    PFCP = #pfcp{version = v1, type = Type, seid = SEID, seq_no = 0, ie = IEs},
+    pfcp_packet:encode(PFCP),
+    pfcp_packet:to_map(PFCP).
+
 make_forward_session(SEID,
 		     LeftIntf,  LeftTEI,  LeftPeerIP,  LeftPeerTEI,
 		     RightIntf, RightTEI, RightPeerIP, RightPeerTEI) ->
-    IEs = #{cp_f_seid => SEID,
-	    create_pdr => [#{pdr_id => 1, precedence => 100,
-			     pdi => #{source_interface => access,
-				      network_instance => LeftIntf,
-				      local_f_teid => #f_teid{teid = LeftTEI}},
-			     outer_header_removal => true, far_id => 2,
-			     urr_id => [1]},
-			   #{pdr_id => 2, precedence => 100,
-			     pdi => #{source_interface => core,
-				      network_instance => RightIntf,
-				      local_f_teid => #f_teid{teid = RightTEI}},
-			     outer_header_removal => true, far_id => 1,
-			     urr_id => [1]}],
-	    create_far => [#{far_id => 1, apply_action => [forward],
-			     forwarding_parameters => #{
-			       destination_interface => access,
-			       network_instance => LeftIntf,
-			       outer_header_creation =>
-				   #f_teid{ipv4 = LeftPeerIP,
-					   teid = LeftPeerTEI}}},
-			   #{far_id => 2, apply_action => [forward],
-			     forwarding_parameters => #{
-			       destination_interface => core,
-			       network_instance => RightIntf,
-			       outer_header_creation =>
-				   #f_teid{ipv4 = RightPeerIP,
-					   teid = RightPeerTEI}}}],
-	    create_urr => [#{urr_id => 1, measurement_method => [volume]}]
+    IEs =
+	[#f_seid{seid = SEID},
+	 #create_pdr{
+	    group =
+		[#pdr_id{id = 1},
+		 #precedence{precedence = 100},
+		 #pdi{
+		    group =
+			[#source_interface{interface = 'Access'},
+			 network_instance(LeftIntf),
+			 #f_teid{teid = LeftTEI}]
+		   },
+		 #outer_header_removal{header = 'GTP-U/UDP/IPv4'},
+		 #far_id{id = 2},
+		 #urr_id{id = 1}]
 	   },
-    {SEID, session_establishment_request, IEs}.
+	 #create_pdr{
+	    group =
+		[#pdr_id{id = 2},
+		 #precedence{precedence = 100},
+		 #pdi{
+		    group =
+			[#source_interface{interface = 'Core'},
+			 network_instance(RightIntf),
+			 #f_teid{teid = RightTEI}]
+		   },
+		 #outer_header_removal{header = 'GTP-U/UDP/IPv4'},
+		 #far_id{id = 1},
+		 #urr_id{id = 1}]
+	   },
+	 #create_far{
+	    group =
+		[#far_id{id = 1},
+		 #apply_action{forw = 1},
+		 #forwarding_parameters{
+		    group =
+			[#destination_interface{interface = 'Access'},
+			  network_instance(LeftIntf),
+			 #outer_header_creation{
+			    type = 'GTP-U/UDP/IPv4',
+			    teid = LeftPeerTEI,
+			    address = ip2bin(LeftPeerIP)
+			   }
+			]
+		   }
+		]
+	   },
+	 #create_far{
+	    group =
+		[#far_id{id = 2},
+		 #apply_action{forw = 1},
+		 #forwarding_parameters{
+		    group =
+			[#destination_interface{interface = 'Core'},
+			  network_instance(RightIntf),
+			 #outer_header_creation{
+			    type = 'GTP-U/UDP/IPv4',
+			    teid = RightPeerTEI,
+			    address = ip2bin(RightPeerIP)
+			   }
+			]
+		   }
+		]
+	   },
+	 #create_urr{
+	    group =
+		[#urr_id{id = 1},
+		 #measurement_method{volum = 1}
+		]
+	   }
+	],
+    make_pfcp(session_establishment_request, 0, IEs).
 
 make_update_pdr(SEID, RuleId, IntfType, Instance, TEI) ->
-    IEs = #{cp_f_seid => SEID,
-	    update_pdr => [#{pdr_id => RuleId, precedence => 100,
-			     pdi => #{source_interface => IntfType,
-				      network_instance => Instance,
-				      local_f_teid => #f_teid{teid = TEI}},
-			     outer_header_removal => true, far_id => RuleId,
-			     urr_id => [1]}]
-	   },
-    {SEID, session_modification_request, IEs}.
+    IEs =
+	[#f_seid{seid = SEID},
+	 #update_pdr{
+	     group =
+		 [#pdr_id{id = RuleId},
+		  #precedence{precedence = 100},
+		  #pdi{
+		     group =
+			 [#source_interface{interface = IntfType},
+			  network_instance(Instance),
+			  #f_teid{teid = TEI}]
+		    },
+		  #outer_header_removal{header = 'GTP-U/UDP/IPv4'},
+		  #far_id{id = RuleId},
+		  #urr_id{id = 1}]
+	   }
+	],
+    make_pfcp(session_modification_request, SEID, IEs).
 
 make_update_far(SEID, RuleId, IntfType, Instance, PeerIP, PeerTEI) ->
     make_update_far(SEID, RuleId, IntfType, Instance, PeerIP, PeerTEI, false).
 
 make_update_far(SEID, RuleId, IntfType, Instance, PeerIP, PeerTEI, SndEM) ->
-    FAR0 = #{far_id => RuleId,
-	     apply_action => [forward],
-	     update_forwarding_parameters => #{
-	       destination_interface => IntfType,
-	       network_instance => Instance,
-	       outer_header_creation =>
-		   #f_teid{ipv4 = PeerIP,
-			   teid = PeerTEI}}},
-    FAR = if SndEM =:= true ->
-		  FAR0#{sxsmreq_flags => [sndem]};
-	     true ->
-		  FAR0
-	  end,
-    IEs = #{cp_f_seid => SEID, update_far => [FAR]},
-    {SEID, session_modification_request, IEs}.
+    IEs =
+	[#f_seid{seid = SEID},
+	 #update_far{
+	    group =
+		[#far_id{id = RuleId},
+		 #apply_action{forw = 1},
+		 #update_forwarding_parameters{
+		    group =
+			[#destination_interface{interface = IntfType},
+			 network_instance(Instance),
+			 #outer_header_creation{
+			    type = 'GTP-U/UDP/IPv4',
+			    teid = PeerTEI,
+			    address = ip2bin(PeerIP)
+			   }
+			 | [#sxsmreq_flags{sndem = 1} || SndEM =:= true]
+			]
+		   }
+		]
+	   }
+	],
+    make_pfcp(session_modification_request, SEID, IEs).

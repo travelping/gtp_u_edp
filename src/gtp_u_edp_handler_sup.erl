@@ -10,7 +10,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, create_session/4]).
+-export([start_link/0, create_session/3]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -24,8 +24,8 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-create_session(Name, Owner, SEID, SER) ->
-    supervisor:start_child(?SERVER, [Name, Owner, SEID, SER]).
+create_session(Name, Owner, SER) ->
+    supervisor:start_child(?SERVER, [Name, Owner, SER]).
 
 %% ===================================================================
 %% Supervisor callbacks

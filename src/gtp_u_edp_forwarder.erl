@@ -10,7 +10,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/4, create_session/4]).
+-export([start_link/3, create_session/3]).
 -export([handle_msg/6]).
 
 %% gen_server callbacks
@@ -18,6 +18,7 @@
 	 terminate/2, code_change/3]).
 
 -include_lib("gtplib/include/gtp_packet.hrl").
+-include_lib("pfcplib/include/pfcp_packet.hrl").
 -include("include/gtp_u_edp.hrl").
 
 -define(SERVER, ?MODULE).
@@ -61,11 +62,11 @@
 %%% API
 %%%===================================================================
 
-start_link(Name, Owner, SEID, SER) ->
-    gen_server:start_link(?MODULE, [Name, Owner, SEID, SER], []).
+start_link(Name, Owner, SER) ->
+    gen_server:start_link(?MODULE, [Name, Owner, SER], []).
 
-create_session(Name, Owner, SEID, SER) ->
-    gtp_u_edp_handler_sup:create_session(Name, Owner, SEID, SER).
+create_session(Name, Owner, SER) ->
+    gtp_u_edp_handler_sup:create_session(Name, Owner, SER).
 
 handle_msg(Name, Socket, Req, IP, Port, #gtp{type = g_pdu, tei = TEI, seq_no = _SeqNo} = Msg)
   when is_integer(TEI), TEI /= 0 ->
@@ -99,53 +100,59 @@ handle_msg(_Name, _Socket, _Req, IP, Port, #gtp{type = Type, tei = TEI, seq_no =
 %%% gen_server callbacks
 %%%===================================================================
 
-init([Name, Owner, SEID, SER] = Args) ->
+init([Name, Owner,
+      #pfcp{type = session_establishment_request,
+	    ie = #{f_seid := #f_seid{seid = SEID}} = SER}] = Args) ->
     lager:info("fwd:init(~p)", [Args]),
 
     gtp_u_edp:register(Name, {seid, SEID}, SEID),
     State0 = #state{owner = Owner, name = Name, seid = SEID},
 
     try
-	State1 = lists:foldl(fun create_pdr/2, State0,
-			     maps:get(create_pdr, SER, [])),
-	State2 = lists:foldl(fun create_far/2, State1,
-			    maps:get(create_far, SER, [])),
-	State = lists:foldl(fun create_urr/2, State2,
-			    maps:get(create_urr, SER, [])),
+	State1 = foreach(fun create_pdr/2, State0,
+			 maps:get(create_pdr, SER, [])),
+	State2 = foreach(fun create_far/2, State1,
+			 maps:get(create_far, SER, [])),
+	State = foreach(fun create_urr/2, State2,
+			maps:get(create_urr, SER, [])),
 	{ok, State}
     catch
 	error:noproc ->
 	    {stop, {error, invalid_port}}
     end.
 
-handle_call({OldSEID, session_modification_request, SMR},
+handle_call(#pfcp{type = session_modification_request, seid = OldSEID, ie = SMR},
 	    _From, #state{name = Name} = State0) ->
-    case maps:get(cp_f_seid, SMR, undefined) of
-	SEID when is_integer(SEID) andalso OldSEID /= SEID ->
+    case maps:get(f_seid, SMR, undefined) of
+	#f_seid{seid = SEID} when is_integer(SEID) andalso OldSEID /= SEID ->
 	    gtp_u_edp:unregister(Name, {seid, OldSEID}),
 	    gtp_u_edp:register(Name, {seid, SEID}, SEID);
 	_ ->
 	    ok
     end,
 
-    State1 = lists:foldl(fun update_pdr/2, State0,
-			 maps:get(update_pdr, SMR, [])),
-    State2 = lists:foldl(fun update_far/2, State1,
-			maps:get(update_far, SMR, [])),
-    State = lists:foldl(fun update_urr/2, State2,
-			maps:get(update_urr, SMR, [])),
+    State1 = foreach(fun update_pdr/2, State0,
+		     maps:get(update_pdr, SMR, [])),
+    State2 = foreach(fun update_far/2, State1,
+		     maps:get(update_far, SMR, [])),
+    State = foreach(fun update_urr/2, State2,
+		    maps:get(update_urr, SMR, [])),
 
-    Response = #{
-      usage_report => query_urr(maps:get(query_urr, SMR, []), State)
-     },
-    {reply, {ok, Response}, State};
+    Response0 = #pfcp{version = v1, type = session_modification_response, seid = OldSEID,
+		      ie = [#pfcp_cause{cause = 'Request accepted'} |
+			    query_urr(maps:get(query_urr, SMR, []), State)]},
+    Response = pfcp_packet:to_map(Response0),
+    {reply, Response, State};
 
-handle_call({SEID, session_deletion_request, _}, _From, #state{seid = SEID} = State) ->
+handle_call(#pfcp{type = session_deletion_request, seid = SEID},
+	    _From, #state{seid = SEID} = State) ->
     lager:debug("Forwarder: delete session"),
-    Response = #{
-      usage_report => usage_report(State)
-     },
-    {stop, normal, {ok, Response}, State};
+
+    Response0 = #pfcp{version = v1, type = session_deletion_response, seid = SEID,
+		      ie = [#pfcp_cause{cause = 'Request accepted'} |
+			    usage_report(usage_report_sdr, State)]},
+    Response = pfcp_packet:to_map(Response0),
+    {stop, normal, Response, State};
 
 handle_call(_Request, _From, State) ->
     lager:warning("invalid CALL: ~p", [_Request]),
@@ -184,6 +191,13 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+ip2bin(IP) when is_binary(IP) ->
+    IP;
+ip2bin({A, B, C, D}) ->
+    <<A, B, C, D>>;
+ip2bin({A, B, C, D, E, F, G, H}) ->
+    <<A:16, B:16, C:16, D:16, E:16, F:16, G:16, H:16>>.
+
 link_port(Name) ->
     RegName = gtp_u_edp_port:port_reg_name(Name),
     case whereis(RegName) of
@@ -196,56 +210,113 @@ link_port(Name) ->
     end,
     Pid.
 
-create_pdr(#{pdr_id := PdrId,
-	     pdi := #{
-	       source_interface := SrcIf,
-	       network_instance := InPortName,
-	       local_f_teid := #f_teid{teid = TEI}
-	      },
-	     outer_header_removal := true,
-	     far_id := FarId} = CreatePDR,
-	   #state{pdr = PDRs} = State) ->
+foreach(Fun, Acc, List) when is_list(List) ->
+    lists:foldl(Fun, Acc, List);
+foreach(Fun, Acc, Term) ->
+    Fun(Term, Acc).
+
+get_urr_id(#{urr_id := #urr_id{id = UrrId}}) ->
+    [UrrId];
+get_urr_id(#{urr_id := UrrIds})
+  when is_list(UrrIds) ->
+    [UrrId || #urr_id{id = UrrId} <- UrrIds];
+get_urr_id(_) ->
+    [].
+
+network_instance(Name) when is_list(Name) ->
+    BinName = iolist_to_binary([lists:join($., Name)]),
+    binary_to_existing_atom(BinName, latin1).
+
+bin2ip(IP) when is_tuple(IP) ->
+    IP;
+bin2ip(<<A,B,C,D>>) ->
+    {A,B,C,D};
+bin2ip(<<A:16,B:16,C:16,D:16,E:16,F:16,G:16,H:16>>) ->
+    {A,B,C,D,E,F,G,H}.
+
+create_pdr(
+  #create_pdr{
+     group =
+	 #{pdr_id := #pdr_id{id = PdrId},
+	   pdi :=
+	       #pdi{
+		  group = #{
+		    source_interface := #source_interface{interface = SrcIf},
+		    network_instance := #network_instance{instance = InNI},
+		    f_teid := #f_teid{teid = TEI}
+		   }
+		 },
+	   outer_header_removal :=
+	       #outer_header_removal{header = 'GTP-U/UDP/IPv4'},
+	   far_id := #far_id{id = FarId}
+	  } = CreatePDR},
+  #state{pdr = PDRs} = State) ->
+    InPortName = network_instance(InNI),
     PDR = #pdr{
 	     name = InPortName,
 	     pid = link_port(InPortName),
 	     src_if = SrcIf,
 	     tei = TEI,
 	     far_id = FarId,
-	     urr_id = maps:get(urr_id, CreatePDR, [])
+	     urr_id = get_urr_id(CreatePDR)
 	    },
     gtp_u_edp:register(InPortName, TEI, PdrId),
     State#state{pdr = PDRs#{PdrId => PDR}}.
 
-update_pdr(#{pdr_id := PdrId,
-	     pdi := #{
-	       source_interface := SrcIf,
-	       network_instance := InPortName,
-	       local_f_teid := #f_teid{teid = TEI}
-	      },
-	     outer_header_removal := true,
-	     far_id := FarId} = UpdPDR,
-	   #state{pdr = PDRs} = State) ->
+update_pdr(
+  #update_pdr{
+     group =
+	 #{pdr_id := #pdr_id{id = PdrId},
+	   pdi :=
+	       #pdi{
+		  group = #{
+		    source_interface := #source_interface{interface = SrcIf},
+		    network_instance := #network_instance{instance = InNI},
+		    f_teid := #f_teid{teid = TEI}
+		   }
+		 },
+	   outer_header_removal :=
+	       #outer_header_removal{header = 'GTP-U/UDP/IPv4'},
+	   far_id := #far_id{id = FarId}
+	  } = UpdPDR},
+  #state{pdr = PDRs} = State) ->
     #pdr{name = OldInPortName, tei = OldTEI} = maps:get(PdrId, PDRs),
     gtp_u_edp:unregister(OldInPortName, OldTEI),
+    InPortName = network_instance(InNI),
     PDR = #pdr{
 	     name = InPortName,
 	     pid = link_port(InPortName),
 	     src_if = SrcIf,
 	     tei = TEI,
 	     far_id = FarId,
-	     urr_id = maps:get(urr_id, UpdPDR, [])
+	     urr_id = get_urr_id(UpdPDR)
 	    },
     gtp_u_edp:register(InPortName, TEI, PdrId),
     State#state{pdr = PDRs#{PdrId := PDR}}.
 
-create_far(#{far_id := FarId,
-	     apply_action := [forward],
-	     forwarding_parameters := #{
-	       destination_interface := DstIf,
-	       network_instance := OutPortName,
-	       outer_header_creation := #f_teid{ipv4 = IP, teid = TEI}
-	      }},
-	   #state{far = FARs} = State) ->
+create_far(
+  #create_far{
+     group =
+	 #{far_id := #far_id{id = FarId},
+	   apply_action := #apply_action{forw = 1},
+	   forwarding_parameters :=
+	       #forwarding_parameters{
+		  group = #{
+		    destination_interface := #destination_interface{interface = DstIf},
+		    network_instance := #network_instance{instance = OutNI},
+		    outer_header_creation :=
+			#outer_header_creation{
+			   type = 'GTP-U/UDP/IPv4',
+			   teid = TEI,
+			   address = BinIP
+			  }
+		    }
+		 }
+	  }
+    },
+  #state{far = FARs} = State) ->
+    OutPortName = network_instance(OutNI),
+    IP = bin2ip(BinIP),
     FAR = #far{
 	     name = OutPortName,
 	     pid = link_port(OutPortName),
@@ -257,16 +328,31 @@ create_far(#{far_id := FarId,
     gtp_u_edp:register(OutPortName, {remote, IP, TEI}, undefined),
     State#state{far = FARs#{FarId => FAR}}.
 
-update_far(#{far_id := FarId,
-	     apply_action := [forward],
-	     update_forwarding_parameters := #{
-	       destination_interface := DstIf,
-	       network_instance := OutPortName,
-	       outer_header_creation := #f_teid{ipv4 = IP, teid = TEI}
-	      }} = UpdFAR,
-	   #state{far = FARs} = State) ->
+update_far(
+  #update_far{
+     group =
+	 #{far_id := #far_id{id = FarId},
+	   apply_action := #apply_action{forw = 1},
+	   update_forwarding_parameters :=
+	       #update_forwarding_parameters{
+		  group = #{
+		    destination_interface := #destination_interface{interface = DstIf},
+		    network_instance := #network_instance{instance = OutNI},
+		    outer_header_creation :=
+			#outer_header_creation{
+			   type = 'GTP-U/UDP/IPv4',
+			   teid = TEI,
+			   address = BinIP
+			  }
+		   } = UpdFARParam
+		 }
+	  }
+    },
+  #state{far = FARs} = State) ->
     #far{name = OldOutPortName, ip = OldIP, tei = OldTEI} = maps:get(FarId, FARs),
     gtp_u_edp:unregister(OldOutPortName, {remote, OldIP, OldTEI}),
+    OutPortName = network_instance(OutNI),
+    IP = bin2ip(BinIP),
     FAR = #far{
 	     name = OutPortName,
 	     pid = link_port(OutPortName),
@@ -277,9 +363,8 @@ update_far(#{far_id := FarId,
 	    },
     gtp_u_edp:register(OutPortName, {remote, IP, TEI}, undefined),
 
-    SxSMReqFlags = maps:get(sxsmreq_flags, UpdFAR, []),
-    case proplists:get_bool(sndem, SxSMReqFlags) of
-	true ->
+    case UpdFARParam of
+	#{sxsmreq_flags := #sxsmreq_flags{sndem = 1}} ->
 	    send_end_marker(OldOutPortName, OldIP, OldTEI),
 	    ok;
 	_ ->
@@ -287,15 +372,26 @@ update_far(#{far_id := FarId,
     end,
     State#state{far = FARs#{FarId := FAR}}.
 
-create_urr(#{urr_id := UrrId} = URR, #state{urr = URRs} = State) ->
+create_urr(
+  #create_urr{
+     group =
+	 #{urr_id :=
+	       #urr_id{id = UrrId}} = URR},
+  #state{urr = URRs} = State) ->
     State#state{urr = URRs#{UrrId => URR}}.
 
-update_urr(#{urr_id := UrrId} = URR, #state{urr = URRs} = State) ->
+update_urr(
+  #update_urr{
+     group =
+	 #{urr_id := #urr_id{id = UrrId}} = URR},
+  #state{urr = URRs} = State) ->
     %% TODO: keep old counter state ????
     State#state{urr = URRs#{UrrId => URR}}.
 
-query_urr(UrrIds, #state{urr = URRs}) ->
-    maps:fold(fun usage_report/3, [], maps:with(UrrIds, URRs)).
+query_urr(Query, #state{urr = URRs}) ->
+    UrrIds = [Id || #query_urr{group = #{urr_id := #urr_id{id = Id}}} <- Query],
+    maps:fold(fun(K,V,Acc) -> usage_report(usage_report_smr, K, V, Acc) end,
+	      [], maps:with(UrrIds, URRs)).
 
 get_pdr(PdrId, #state{pdr = PDRs}) ->
     maps:get(PdrId, PDRs, undefined).
@@ -321,8 +417,8 @@ process_usage_reporting(PdrId, #pdr{src_if = SrcIf, urr_id = UrrIds},
 			update_urr(UrrId, URR, StateIn)
 		end, State, UrrIds).
 
--define(IS_SRC_UL_IntF(X), (X =:= 'access')).
--define(IS_SRC_DL_IntF(X), (X =:= 'core')).
+-define(IS_SRC_UL_IntF(X), (X =:= 'Access')).
+-define(IS_SRC_DL_IntF(X), (X =:= 'Core')).
 
 update_counter(Add, {Bytes, Pkts}) ->
     {Bytes + Add, Pkts + 1}.
@@ -376,33 +472,33 @@ error_indication_report(IP, #gtp{ie = IEs},
 			#state{owner = Owner, seid = SEID}) ->
     #tunnel_endpoint_identifier_data_i{tei = TEI} =
 	maps:get(?'Tunnel Endpoint Identifier Data I', IEs),
-    FTEID = #f_teid{ipv4 = IP, teid = TEI},
-    SRR = #{
-      report_type => [error_indication_report],
-      error_indication_report =>
-	  [#{remote_f_teid => FTEID}]
-     },
-    Owner ! {SEID, session_report_request, SRR}.
+    SRR =
+	[#report_type{erir = 1},
+	 #error_indication_report{
+	    group = [#f_teid{ipv4 = ip2bin(IP), teid = TEI}]}],
+    Request = #pfcp{version = v1, type = session_report_request,
+		    seid = SEID, ie = SRR},
+    Owner ! pfcp_packet:to_map(Request).
 
-urr_volume_report(_URR, #counter{
-			   dl = DL, ul = UL, total = Total,
-			   dropped_dl = DropDL, dropped_ul = DropUL}) ->
-    #{dl => DL, ul => UL, total => Total,
-      dropped_dl => DropDL, dropped_ul => DropUL}.
+urr_volume_report(Type, UrrId,
+		  #counter{dl = {DLBytes, DLPkts},
+			   ul = {ULBytes, ULPkts},
+			   total = {Bytes, Pkts}
+			  }) ->
+    {Type, [#urr_id{id = UrrId},
+	    #volume_measurement{total = Bytes, uplink = ULBytes, downlink = DLBytes},
+	    #tp_packet_measurement{total = Pkts, uplink = ULPkts, downlink = DLPkts}]}.
 
-usage_report(UrrId, #{
-	       measurement_method := [volume],
-	       counter := Counter} = URR, Reports) ->
-    UR = #{
-      urr_id => UrrId,
-      volume => urr_volume_report(URR, Counter)
-     },
+usage_report(Type, UrrId, #{
+		     measurement_method := #measurement_method{volum = 1},
+		     counter := Counter}, Reports) ->
+    UR = urr_volume_report(Type, UrrId, Counter),
     [UR | Reports];
-usage_report(_, _, Reports) ->
+usage_report(_, _, _, Reports) ->
     Reports.
 
-usage_report(#state{urr = URRs}) ->
-    maps:fold(fun usage_report/3, [], URRs).
+usage_report(Type, #state{urr = URRs}) ->
+    maps:fold(fun(K,V,Acc) -> usage_report(Type,K,V,Acc) end, [], URRs).
 
 send_end_marker(PortName, IP, TEI) ->
     RegName = gtp_u_edp_port:port_reg_name(PortName),
