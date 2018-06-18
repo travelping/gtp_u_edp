@@ -17,7 +17,17 @@
 -include_lib("gtplib/include/gtp_packet.hrl").
 -include("include/gtp_u_edp.hrl").
 
--define(EXO_PERF_OPTS, [{time_span, 300 * 1000}]).		%% 5 min histogram
+-define(EXO_PERF_OPTS, [
+		        {time_span, 300 * 1000},  %% 5 min histogram
+
+		        %% exometer spawns a process per historgram
+		        %% the default exometer-`min_heap_size` for such a
+		        %% process is about 40k words (320+ kbyte). this
+		        %% results in measurable memory overhead per
+		        %% histogram. we set `min_heap_size` to 233, as
+		        %% described in the Erlang Efficiency Guide, see
+		        %% http://erlang.org/doc/efficiency_guide/advanced.html#id71365
+		        {min_heap_size, 233}]).
 -define(GTP_U_MSGS, [echo_request, version_not_supported,
 		      end_marker, g_pdu]).
 -define(GTP_U_ERRS, [context_not_found,
